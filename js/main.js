@@ -2,6 +2,7 @@ import { sb, configured, check, state, loadProfile, loadWarehouses, role } from 
 import { esc, $, $$, toast } from './ui.js';
 import { APP_NAME } from './config.js';
 import home from './pages/home.js';
+import orders from './pages/orders.js';
 import sales from './pages/sales.js';
 import stock from './pages/stock.js';
 import items from './pages/items.js';
@@ -10,7 +11,7 @@ import users from './pages/users.js';
 
 // Each screen says which roles may open it. The database enforces the
 // same rules, so hiding a menu item is for tidiness, not security.
-const PAGES = { home, sales, stock, items, warehouses, users };
+const PAGES = { home, orders, sales, stock, items, warehouses, users };
 const ROLE_LABEL = { admin: 'Admin', manager: 'Manager', purchase: 'Purchase Team', pending: 'Waiting for approval' };
 
 const app = $('#app');

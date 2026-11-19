@@ -147,3 +147,25 @@ details { margin: 8px 0; } summary { cursor: pointer; color: var(--brand); font-
   .card { padding: 14px; }
   input[type="search"] { min-width: 0; width: 100%; }
 }
+
+/* orders */
+.tab .count { color: var(--muted); font-weight: 500; font-size: .85em; }
+.tbl.order input.qty { width: 74px; text-align: right; min-height: 32px; padding: 4px 6px; }
+.tbl.order td:first-child, .tbl.order th:first-child { width: 28px; }
+.tbl.order td:nth-child(2) { min-width: 220px; }
+.tbl tr.ordered td { background: #fff4e5; }
+.tbl tr.off td { opacity: .45; }
+.today-note { font-size: .78rem; color: var(--warn); font-weight: 600; margin-top: 2px; }
+.order-bar { position: sticky; bottom: 0; background: var(--surface); border-top: 1px solid var(--line); padding: 12px 0 4px;
+  display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+.order-bar #sum { flex: 1; min-width: 180px; }
+.order-bar #note { min-width: 180px; }
+.add-box { position: relative; }
+.add-box input { min-width: 260px; }
+.add-res { position: absolute; z-index: 6; top: 100%; left: 0; right: 0; background: #fff; border: 1px solid var(--line);
+  border-radius: 8px; box-shadow: var(--shadow); max-height: 300px; overflow: auto; }
+.add-res:empty { display: none; }
+.add-res button { display: block; width: 100%; text-align: left; border: 0; background: none; padding: 8px 10px; font: inherit; cursor: pointer; }
+.add-res button:hover { background: var(--brand-soft); }
+.nowrap { white-space: nowrap; }
+details.note summary { color: var(--ink); }

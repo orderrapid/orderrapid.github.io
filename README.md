@@ -10,15 +10,19 @@ There is no build step: the files in this folder are the website.
 
 | Screen | Who | What it does |
 |---|---|---|
-| Home | everyone | Per warehouse: **sales uploaded up to** which date, and when stock was last counted |
+| Home | everyone | Per warehouse: **sales uploaded up to** which date, and when stock was last counted. Admin: database space used |
+| Orders | everyone (placing: Admin, Purchase Team) | Min / Max per medicine (same rules as MEDICINE ORDERING SHEET v4), Order Qty = Max − stock − already on order, place order + Excel, "ordered today" warnings; tabs New – Decide, Too Much Stock, Not Ordering, Slow Medicines, Orders placed |
 | Sales upload | Admin, Manager | Pick warehouse → upload Excel → check summary → confirm. Lines already uploaded are skipped; gaps in dates are warned about |
 | Stock | Admin, Purchase Team | Upload *Medicine Name, Pack Size, Stock in Loose*. Converted to strips using the item master. Items with no or wrong conversion are flagged |
 | Item master | Admin | Load the Strips sheet (*Item Name, Pack Size, Qty in Loose*). Fix conversions; busiest problem items first |
 | Warehouses | Admin | Add, rename, switch off warehouses |
 | Users | Admin | Approve sign-ups, set roles, block users, **set a new password** for anyone who forgets |
 
-Coming in part 2: your analysis (Min/Max) running automatically, order suggestions,
-order sheets with "already ordered this morning" warnings. Part 3: purchase import and overstock report.
+Coming in part 3: purchase import and the overstock report (repeat orders, duplicate codes, pack sizes).
+
+## Database updates
+Run each file once, in order, in Supabase → SQL Editor: `01_schema.sql`, `02_sale_time.sql`, `03_orders.sql`.
+All are safe to run again.
 
 ## One-time setup (about 20 minutes)
 

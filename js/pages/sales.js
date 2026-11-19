@@ -1,4 +1,5 @@
 import { sb, check, state, rememberWarehouse, warehouseName } from '../db.js';
+import { recalculate } from '../levels.js';
 import { esc, $, fmtDate, fmtDateTime, fmtNum, toast, confirmBox, readExcel, warehouseOptions, addDays, downloadExcel } from '../ui.js';
 
 const BATCH = 2500;
@@ -34,7 +35,7 @@ export default {
         ? `<span class="label">${esc(s.warehouse)}: sales uploaded up to</span><span class="value">${fmtDate(s.last_date)}</span>
            <span class="hint">Next file should start from ${fmtDate(addDays(s.last_date, 1))}</span>`
         : `<span class="label">No sales uploaded yet for ${esc(warehouseName(whSel.value))}</span>
-           <span class="hint">Your first file can hold the full history; only the last 400 days are kept.</span>`;
+           <span class="hint">Your first file can hold the full history.</span>`;
     };
     whSel.onchange = () => { rememberWarehouse(whSel.value); showStatus(); $('#work', el).innerHTML = ''; };
     await showStatus();
@@ -139,9 +140,19 @@ export default {
       whSel.disabled = false;
       prog.innerHTML = `<div class="note ok"><b>Saved.</b> ${fmtNum(total.saved)} new lines saved.
         ${total.already ? `${fmtNum(total.already)} were already uploaded and skipped.` : ''}
-        ${total.too_old ? `${fmtNum(total.too_old)} older than 400 days were not kept.` : ''}
+        ${total.too_old ? `${fmtNum(total.too_old)} were older than the history kept (Admin setting) and were not saved.` : ''}
         ${total.skipped ? `${fmtNum(total.skipped)} had zero/negative quantity (returns) and were left out.` : ''}</div>`;
       toast('Sales saved');
+      // work out Min / Max again with the new sales
+      const rc = document.createElement('p');
+      rc.className = 'muted small';
+      prog.appendChild(rc);
+      try {
+        const r = await recalculate(wh, (m) => (rc.textContent = `Updating Min / Max: ${m}`));
+        rc.textContent = `Min / Max updated for ${fmtNum(r.count)} medicines (sales up to ${fmtDate(r.salesUpTo)}). Orders can use it now.`;
+      } catch (e) {
+        rc.textContent = `Sales are saved. Min / Max will update when someone opens Orders (${e.message}).`;
+      }
       await showStatus();
       loadHistory(el);
     }
