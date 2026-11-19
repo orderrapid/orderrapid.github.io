@@ -21,7 +21,7 @@ There is no build step: the files in this folder are the website.
 Coming in part 3: purchase import and the overstock report (repeat orders, duplicate codes, pack sizes).
 
 ## Database updates
-Run each file once, in order, in Supabase → SQL Editor: `01_schema.sql`, `02_sale_time.sql`, `03_orders.sql`.
+Run each file once, in order, in Supabase → SQL Editor: `01_schema.sql`, `02_sale_time.sql`, `03_orders.sql`, `04_check_upload.sql`.
 All are safe to run again.
 
 ## One-time setup (about 20 minutes)

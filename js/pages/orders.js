@@ -7,6 +7,7 @@ const SHOW = 500;   // rows drawn per tab; the download has everything
 
 const TABS = [
   ['order', 'Order Sheet'],
+  ['checked', 'No order needed'],
   ['decide', 'New – Decide'],
   ['over', 'Too Much Stock'],
   ['notorder', 'Not Ordering'],
@@ -61,10 +62,11 @@ export default {
       }
       const [sheet, up] = await Promise.all([
         sb.rpc('order_sheet', { p_warehouse_id: Number(wh) }).then(check),
-        sb.from('stock_uploads').select('created_at').eq('warehouse_id', Number(wh))
+        sb.from('stock_uploads').select('created_at, file_name').eq('warehouse_id', Number(wh))
           .order('created_at', { ascending: false }).limit(1).then(check),
       ]);
       stockAt = up[0]?.created_at || null;
+      const stockFile = up[0]?.file_name || '';
       rows = sheet.map((r) => {
         const closing = r.closing === null ? (r.stock_flag === 'No conversion' ? null : 0) : Number(r.closing);
         const open = Number(r.open_qty || 0);
@@ -80,15 +82,19 @@ export default {
       // freshness box
       $('#fresh', el).innerHTML = st.run
         ? `<span class="label">Min / Max from sales up to</span><span class="value">${fmtDate(st.run.sales_up_to)}</span>
-           <span class="hint">Stock counted: ${stockAt ? fmtDateTime(stockAt) : 'never'}</span>`
+           <span class="hint">Sales Min / Max calculated ${fmtDateTime(st.run.computed_at)}</span>`
         : `<span class="label">No sales uploaded yet for ${esc(warehouseName(wh))}</span>`;
       const alerts = [];
-      if (!stockAt) alerts.push(`No stock uploaded for ${esc(warehouseName(wh))} yet, so every medicine counts as 0 in stock. <a href="#/stock">Upload stock</a> first.`);
-      else if (new Date(stockAt).toDateString() !== new Date().toDateString())
-        alerts.push(`Stock was last counted on <b>${fmtDateTime(stockAt)}</b>, not today. Upload today's stock for correct order quantities.`);
+      if (!stockAt) alerts.push(`No stock uploaded for ${esc(warehouseName(wh))} yet. <a href="#/stock">Upload stock</a> — the full stock, or just the medicines that sold — and this screen tells you which of them to order.`);
+      else {
+        const old = new Date(stockAt).toDateString() !== new Date().toDateString();
+        alerts.push(`<span class="info">Checking <b>${fmtNum(rows.length)}</b> medicines from the stock upload of <b>${fmtDateTime(stockAt)}</b>${stockFile ? ` (${esc(stockFile)})` : ''}:
+          <b>${fmtNum(rows.filter((r) => r.suggested > 0).length)}</b> to order, <b>${fmtNum(rows.filter((r) => !(r.suggested > 0)).length)}</b> no order needed.
+          Medicines not in that file are not checked.</span>${old ? '<br><b>This upload is not from today.</b> Upload a fresh stock file to check the latest.' : ''}`);
+      }
       const noConv = rows.filter((r) => r.closing === null && r.can_order).length;
       if (noConv) alerts.push(`<b>${noConv}</b> medicine(s) have stock but no loose-to-strip conversion, so they are left out of the order. ${isRole('admin') ? '<a href="#/items">Fix in Item master</a>' : 'Ask the Admin to fix them in Item master.'}`);
-      $('#alerts', el).innerHTML = alerts.map((a) => `<div class="note warn">${a}</div>`).join('');
+      $('#alerts', el).innerHTML = alerts.map((a) => `<div class="note ${a.startsWith('<span class="info">') && !a.includes('not from today') ? '' : 'warn'}">${a}</div>`).join('');
       draw();
     }
 
@@ -103,6 +109,8 @@ export default {
       notorder: () => rows.filter((r) => !r.can_order && !/decide by hand/.test(r.why || ''))
         .sort((a, b) => (a.days_since ?? 9999) - (b.days_since ?? 9999)),
       slow: () => rows.filter((r) => (r.grp || '').startsWith('Slow')).sort((a, b) => (b.qty_90 || 0) - (a.qty_90 || 0)),
+      checked: () => rows.filter((r) => !(r.suggested > 0) && !extra.has(r.item_id))
+        .sort((a, b) => reasonOrder(a) - reasonOrder(b) || a.name.localeCompare(b.name)),
     };
 
     const grpCell = (r) => `${esc(r.grp)}${r.growing ? ' <span class="pill done">Growing</span>' : ''}`;
@@ -118,6 +126,10 @@ export default {
       if (tab === 'order') return drawOrder(view);
       const list = pick[tab]();
       const cols = {
+        checked: [['Medicine', (r) => esc(r.name) + todayNote(r)], ['Pack', (r) => esc(r.pack_size)], ['Reason', (r) => esc(reason(r))],
+          ['Group', grpCell], ['Stock', stockCell], ['On order', (r) => r.open ? fmtNum(r.open, 2) : ''],
+          ['Min', (r) => r.can_order ? fmtNum(r.min_stock) : ''], ['Max', (r) => r.can_order ? fmtNum(r.max_stock) : ''],
+          ['Sold 30d', (r) => fmtNum(r.qty_30, 2)], ['Last sold', (r) => fmtDate(r.last_sold)]],
         decide: [['Medicine', (r) => esc(r.name)], ['Pack', (r) => esc(r.pack_size)], ['Days selling', (r) => fmtNum(r.days_selling)],
           ['Bills (360d)', (r) => fmtNum(r.total_bills)], ['Customers 30d', (r) => fmtNum(r.cust_30)], ['Normal sale', (r) => fmtNum(r.normal_sale, 1)],
           ['Sold 30d', (r) => fmtNum(r.qty_30, 2)], ['Stock', stockCell], ['Last sold', (r) => fmtDate(r.last_sold)], ['Days since', (r) => fmtNum(r.days_since)]],
@@ -135,6 +147,7 @@ export default {
         <div class="row"><input type="search" id="q" placeholder="Search medicine…">
           <button class="btn ghost small" id="dl">Download Excel</button></div>
         ${tab === 'decide' ? '<p class="muted small">New medicines with only one sale so far. The numbers can\'t tell a chronic patient from a one-off; you can. Add the ones you want to stock to today\'s order.</p>' : ''}
+        ${tab === 'checked' ? '<p class="muted small">Every medicine from the stock upload that does not need ordering now, and why.</p>' : ''}
         ${tab === 'over' ? `<p class="muted small">Stock on the shelf that will last more than ${cfg.expiry_warning_days || 60} days at the current selling rate.</p>` : ''}
         <div class="scroll"><table class="tbl" id="t">
           <tr>${cols.map(([h]) => `<th>${h}</th>`).join('')}${addBtn ? '<th></th>' : ''}</tr>
@@ -346,6 +359,18 @@ export default {
     await load();
   },
 };
+
+// why a medicine from the stock upload is not on the Order Sheet
+function reason(r) {
+  if (r.closing === null) return 'No loose-to-strip conversion — fix in Item master';
+  if (!r.can_order) return r.why || 'No sales in the last year';
+  if (r.open > 0 && r.closing + r.open >= r.min_stock) return `Already on order (${r.open})`;
+  return `Enough stock (${r.closing} ≥ Min ${r.min_stock})`;
+}
+function reasonOrder(r) {
+  const t = reason(r);
+  return t.startsWith('No loose') ? 0 : t.startsWith('Already') ? 1 : t.startsWith('Enough') ? 2 : 3;
+}
 
 // strip HTML for the Excel download
 function plain(html) {

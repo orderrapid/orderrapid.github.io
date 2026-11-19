@@ -301,8 +301,9 @@ language sql stable security definer set search_path = public as $$
   group by l.item_id
 $$;
 
--- Everything the order screen needs in one call: levels + latest stock
--- + what's on order. Leaves out dead medicines that have no stock.
+-- Everything the order screen needs in one call, for the medicines in
+-- the LATEST stock upload only (a full count or just what sold — either
+-- way, only uploaded medicines are checked): levels + stock + on order.
 create or replace function public.order_sheet(p_warehouse_id integer)
 returns table (
   item_id integer, name text, pack_size text, grp text, growing boolean, speed text, pattern text, why text,
@@ -325,12 +326,9 @@ language sql stable security definer set search_path = public as $$
          oo.open_qty, oo.today_qty, oo.last_at, oo.last_qty, oo.last_by, oo.last_distributor
   from items i
   left join item_levels lv on lv.item_id = i.id and lv.warehouse_id = p_warehouse_id
-  left join st on st.item_id = i.id
+  join st on st.item_id = i.id
   left join oo on oo.item_id = i.id
   where public.is_staff()
-    and (lv.item_id is not null or st.item_id is not null or oo.item_id is not null)
-    and (coalesce(lv.can_order, false) or coalesce(st.loose_qty, 0) > 0 or oo.item_id is not null
-         or lv.grp = 'New')
 $$;
 
 -- Database space used (Admin home)
