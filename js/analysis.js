@@ -263,7 +263,7 @@ export function calculateLevels(data, cfg = DEFAULTS, chronic = new Set()) {
       weeks_sold: weeksSold, min_stock: minL, max_stock: maxL, can_order: maxL > 0,
       lasts_days: lasts,
       warning: maxL > 0 && lasts > C.expiry_warning_days ? 'TOO MUCH STOCK' : '',
-      qty_30: qty30, qty_90: Qty(90), bills_30: Sales(30), cust_30: Cust(30), cust_90: cust90,
+      qty_7: Qty(7), qty_30: qty30, qty_60: Qty(60), qty_90: Qty(90), bills_30: Sales(30), cust_30: Cust(30), cust_90: cust90,
       total_bills: totalBills, days_selling: daysSelling, last_sold: lastD, days_since: daysSince,
       odd_note: oddNote, odd_sales: oddBills.size, avg_visits: avgVisits, busy_days: busyDays,
       days_sold_30: daysSold, normal_qty_30: normalQty, biggest_day: pyRound(biggestDay, 1), avg_gap: avgGap,

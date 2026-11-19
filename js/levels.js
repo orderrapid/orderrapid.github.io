@@ -43,7 +43,7 @@ export async function recalculate(warehouseId, onStatus) {
     item_id: r.item_id, grp: r.grp, growing: r.growing, speed: r.speed, pattern: r.pattern, why: r.why,
     per_day: r.per_day, normal_sale: r.normal_sale, big_sale: r.big_sale, weeks_sold: r.weeks_sold,
     min_stock: r.min_stock, max_stock: r.max_stock, can_order: r.can_order, lasts_days: r.lasts_days,
-    warning: r.warning, qty_30: r.qty_30, qty_90: r.qty_90, bills_30: r.bills_30, cust_30: r.cust_30,
+    warning: r.warning, qty_7: r.qty_7, qty_30: r.qty_30, qty_60: r.qty_60, qty_90: r.qty_90, bills_30: r.bills_30, cust_30: r.cust_30,
     cust_90: r.cust_90, total_bills: r.total_bills, days_selling: r.days_selling, last_sold: r.last_sold,
     days_since: r.days_since, odd_note: r.odd_note,
   }));
