@@ -152,7 +152,13 @@ details { margin: 8px 0; } summary { cursor: pointer; color: var(--brand); font-
 .tab .count { color: var(--muted); font-weight: 500; font-size: .85em; }
 .tbl.order input.qty { width: 74px; text-align: right; min-height: 32px; padding: 4px 6px; }
 .tbl.order td:first-child, .tbl.order th:first-child { width: 28px; }
-.tbl.order td:nth-child(2) { min-width: 220px; }
+.tbl.order td.med { min-width: 240px; }
+.tbl.order { font-size: .86rem; }
+.tbl.order th { white-space: normal; vertical-align: bottom; font-size: .7rem; }
+.tbl.order td { padding: 6px 7px; }
+main:has(.wide-page) { max-width: 1600px; }
+.switch { display: inline-flex; align-items: center; gap: 6px; font-size: .88rem; color: var(--muted); cursor: pointer; }
+.switch input { min-height: 0; }
 .tbl tr.ordered td { background: #fff4e5; }
 .tbl tr.off td { opacity: .45; }
 .today-note { font-size: .78rem; color: var(--warn); font-weight: 600; margin-top: 2px; }

@@ -20,6 +20,7 @@ export default {
   roles: ['admin', 'purchase', 'manager'],
   async render(el) {
     const canPlace = isRole('admin', 'purchase');
+    el.classList.add('wide-page');
     el.innerHTML = `
       <h1>Orders</h1>
       <div class="card">
@@ -40,6 +41,8 @@ export default {
     let rows = [], cfg = {}, tab = 'order', stockAt = null, extra = new Map();
     // extra: medicines added by hand to the order (item_id -> qty)
     const qtyEdits = new Map(), unticked = new Set();
+    let more = false;
+    try { more = localStorage.getItem('orderMoreCols') === '1'; } catch { /* ignore */ }
 
     whSel.onchange = () => { rememberWarehouse(whSel.value); extra.clear(); qtyEdits.clear(); unticked.clear(); load(); };
     $('#recalc', el).onclick = () => load(true);
@@ -186,6 +189,7 @@ export default {
         <div class="row">
           <input type="search" id="q" placeholder="Search in this list…">
           <div class="add-box"><input type="search" id="addq" placeholder="+ Add another medicine…" autocomplete="off"><div id="addres" class="add-res"></div></div>
+          <label class="switch"><input type="checkbox" id="moreCols" ${more ? 'checked' : ''}> Show more columns</label>
         </div>
         ${leftOut.length ? `<details class="note"><summary><b>${leftOut.length}</b> medicine(s) were ordered earlier today and are already covered — not suggested again</summary>
           <table class="tbl compact">${leftOut.map((r) => `<tr><td>${esc(r.name)}</td><td>${esc(r.pack_size)}</td><td>${todayNote(r)}</td></tr>`).join('')}</table></details>` : ''}
@@ -203,21 +207,25 @@ export default {
       const paint = () => {
         const q = $('#q', view).value.trim().toLowerCase();
         const shown = list.filter((r) => !q || r.name.toLowerCase().includes(q));
-        $('#t', view).innerHTML = `<tr><th><input type="checkbox" id="all" ${list.some((r) => !unticked.has(r.item_id)) ? 'checked' : ''} title="Tick / untick all"></th><th>Medicine</th><th>Pack</th><th>Group</th><th>Trend</th>
-          <th class="num">Strips/day</th><th class="num">Normal sale</th><th class="num">Weeks (of 13)</th><th class="num">Min</th><th class="num">Max</th>
-          <th class="num">Stock</th><th class="num">On order</th><th class="num">Order Qty</th><th class="num">Days on shelf</th><th>Warning</th>
-          <th class="num">Sold 30d</th><th class="num">Sold 90d</th><th>Last sold</th></tr>` +
+        const M = more;   // extra columns switched on?
+        $('#t', view).innerHTML = `<tr><th><input type="checkbox" id="all" ${list.some((r) => !unticked.has(r.item_id)) ? 'checked' : ''} title="Tick / untick all"></th>
+          <th>Medicine</th><th>Group</th>
+          ${M ? '<th>Trend</th><th class="num">Strips /day</th><th class="num">Normal sale</th><th class="num">Weeks (of 13)</th>' : ''}
+          <th class="num">Min</th><th class="num">Max</th><th class="num">Stock</th><th class="num">On order</th><th class="num">Order Qty</th>
+          ${M ? '<th class="num">Days on shelf</th>' : ''}
+          <th class="num">Sold 30d</th>${M ? '<th class="num">Sold 90d</th>' : ''}<th>Last sold</th></tr>` +
           shown.slice(0, SHOW).map((r) => `<tr data-id="${r.item_id}" class="${r.orderedToday ? 'ordered' : ''} ${unticked.has(r.item_id) ? 'off' : ''}">
             <td><input type="checkbox" class="tick" ${unticked.has(r.item_id) ? '' : 'checked'}></td>
-            <td>${esc(r.name)}${todayNote(r)}${extra.has(r.item_id) && !r.suggested ? ' <span class="pill">added</span>' : ''}</td>
-            <td>${esc(r.pack_size)}</td><td>${grpCell(r)}</td><td class="small">${esc(r.speed || '')}</td>
-            <td class="num">${fmtNum(r.per_day, 3)}</td><td class="num">${fmtNum(r.normal_sale, 1)}</td><td class="num">${fmtNum(r.weeks_sold)}</td>
+            <td class="med"><b>${esc(r.name)}</b> <span class="muted">${esc(r.pack_size)}</span>${extra.has(r.item_id) && !r.suggested ? ' <span class="pill">added</span>' : ''}
+              ${r.warning ? ` <span class="pill warn">${esc(r.warning)}</span>` : ''}${todayNote(r)}
+              ${r.odd_note && /check/i.test(r.odd_note) ? `<div class="small muted">${esc(r.odd_note)}</div>` : ''}</td>
+            <td>${grpCell(r)}</td>
+            ${M ? `<td class="small">${esc(r.speed || '')}</td><td class="num">${fmtNum(r.per_day, 2)}</td><td class="num">${fmtNum(r.normal_sale, 1)}</td><td class="num">${fmtNum(r.weeks_sold)}</td>` : ''}
             <td class="num">${fmtNum(r.min_stock)}</td><td class="num">${fmtNum(r.max_stock)}</td><td class="num">${stockCell(r)}</td>
             <td class="num">${r.open ? fmtNum(r.open, 2) : ''}</td>
             <td class="num"><input type="number" class="qty" min="0" step="1" value="${finalQty(r)}"></td>
-            <td class="num">${r.shelfDays === null ? '—' : r.shelfDays === 999 ? '—' : fmtNum(r.shelfDays)}</td>
-            <td>${r.warning ? `<span class="pill warn">${esc(r.warning)}</span>` : ''}${r.odd_note && /check/i.test(r.odd_note) ? `<div class="small muted">${esc(r.odd_note)}</div>` : ''}</td>
-            <td class="num">${fmtNum(r.qty_30, 2)}</td><td class="num">${fmtNum(r.qty_90, 2)}</td><td>${fmtDate(r.last_sold)}</td></tr>`).join('');
+            ${M ? `<td class="num">${r.shelfDays === null || r.shelfDays === 999 ? '—' : fmtNum(r.shelfDays)}</td>` : ''}
+            <td class="num">${fmtNum(r.qty_30, 2)}</td>${M ? `<td class="num">${fmtNum(r.qty_90, 2)}</td>` : ''}<td class="nowrap">${fmtDate(r.last_sold)}</td></tr>`).join('');
         $('#more', view).textContent = shown.length > SHOW ? `Showing ${SHOW} of ${fmtNum(shown.length)} — use search to find the rest; all ticked lines are included when you place the order.` : '';
         $$('input.qty', view).forEach((inp) => (inp.onchange = () => { qtyEdits.set(Number(inp.closest('tr').dataset.id), Math.max(Number(inp.value) || 0, 0)); summary(); }));
         $$('input.tick', view).forEach((cb) => (cb.onchange = () => {
@@ -233,6 +241,11 @@ export default {
         $('#sum', view).innerHTML = `<b>${fmtNum(c.length)}</b> medicines · <b>${fmtNum(c.reduce((a, r) => a + finalQty(r), 0))}</b> strips`;
       };
       $('#q', view).oninput = paint;
+      $('#moreCols', view).onchange = (e) => {
+        more = e.target.checked;
+        try { localStorage.setItem('orderMoreCols', more ? '1' : ''); } catch { /* ignore */ }
+        paint();
+      };
 
       // add a medicine by hand
       let t;
