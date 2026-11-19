@@ -70,7 +70,8 @@ export default {
           .order('created_at', { ascending: false }).limit(1).then(check),
       ]);
       // levels saved before Sold 7d / 60d existed: work them out once more
-      if (!force && sheet.length && sheet.every((r) => r.qty_7 == null && r.grp !== 'Not sold')) return load(true);
+      const withLevels = sheet.filter((r) => r.grp !== 'Not sold');
+      if (!force && withLevels.length && withLevels.every((r) => r.qty_7 == null)) return load(true);
       stockAt = up[0]?.created_at || null;
       const stockFile = up[0]?.file_name || '';
       rows = sheet.map((r) => {
@@ -214,10 +215,10 @@ export default {
         const M = more;   // extra columns switched on?
         $('#t', view).innerHTML = `<tr><th><input type="checkbox" id="all" ${list.some((r) => !unticked.has(r.item_id)) ? 'checked' : ''} title="Tick / untick all"></th>
           <th>Medicine</th><th>Group</th>
-          ${M ? '<th>Trend</th><th class="num">Strips /day</th><th class="num">Normal sale</th><th class="num">Weeks (of 13)</th>' : ''}
+          ${M ? '<th>Trend</th><th class="num">Per day</th><th class="num">Normal sale</th><th class="num">Weeks /13</th>' : ''}
           <th class="num">Min</th><th class="num">Max</th><th class="num">Stock</th><th class="num">On order</th><th class="num">Order Qty</th>
           ${canPlace ? '<th>Distributor</th>' : ''}
-          ${M ? '<th class="num">Days on shelf</th>' : ''}
+          ${M ? '<th class="num">Shelf days</th>' : ''}
           <th class="num">Sold 7d</th><th class="num">Sold 30d</th><th class="num">Sold 60d</th>${M ? '<th class="num">Sold 90d</th>' : ''}<th>Last sold</th></tr>` +
           shown.slice(0, SHOW).map((r) => `<tr data-id="${r.item_id}" class="${r.orderedToday ? 'ordered' : ''} ${unticked.has(r.item_id) ? 'off' : ''}">
             <td><input type="checkbox" class="tick" ${unticked.has(r.item_id) ? '' : 'checked'}></td>
