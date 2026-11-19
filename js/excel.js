@@ -22,6 +22,20 @@ export const COLUMNS = {
     loose: ['stockinloose', 'currentstockloose', 'loosestock', 'stockloose', 'closingstockloose',
             'loose', 'currentstock', 'stock'],
   },
+  purchase: {
+    date:   ['date', 'billdate', 'invoicedate', 'purchasedate'],
+    bill:   ['billno', 'invoiceno', 'billnumber', 'invoicenumber', 'challanno'],
+    dist:   ['distributorname', 'distributor', 'suppliername', 'supplier', 'partyname', 'party'],
+    name:   ['medicinename', 'medicinesname', 'itemname', 'productname', 'medicine'],
+    pack:   ['packsize', 'pack'],
+    amount: ['invamount', 'invoiceamount', 'totalinvoiceamount', 'amount', 'netamount'],
+    qty:    ['qty', 'quantity', 'totalquantity', 'qtystrip'],
+  },
+  dupes: {
+    name:     ['itemname', 'medicinesname', 'medicinename', 'productname'],
+    pack:     ['packsize', 'pack'],
+    decision: ['decision', 'status', 'action'],
+  },
   items: {
     name:  ['itemname', 'medicinesname', 'medicinename', 'productname', 'medicine'],
     pack:  ['packsize', 'pack'],
@@ -33,6 +47,8 @@ const REQUIRED = {
   sales: ['date', 'bill', 'name', 'pack', 'qty'],
   stock: ['name', 'pack', 'loose'],
   items: ['name', 'pack', 'loose'],
+  purchase: ['date', 'bill', 'dist', 'name', 'pack', 'qty'],
+  dupes: ['name', 'pack', 'decision'],
 };
 
 // Some exports have a title block above the real headings (row 7 in the
@@ -199,6 +215,45 @@ function parseThreeColumns(rows, kind, field) {
   return { rows: out, problems, headerRow };
 }
 
+export function parsePurchase(rows) {
+  const { headerRow, map } = findColumns(rows, 'purchase');
+  const out = [], problems = [];
+  let first = null, last = null;
+  const bills = new Set(), dists = new Set();
+  for (let r = headerRow + 1; r < rows.length; r++) {
+    const row = rows[r] || [];
+    const n = text(row[map.name]);
+    if (isJunk(n) && !row[map.bill]) continue;
+    const rec = {
+      d: toISODate(row[map.date]), b: text(row[map.bill]), s: text(row[map.dist]).replace(/\s+/g, ' '),
+      n, p: text(row[map.pack]), q: toNumber(row[map.qty]),
+      a: map.amount !== undefined ? toNumber(row[map.amount]) : null,
+    };
+    if (!rec.d || !rec.b || !rec.s || !n || rec.q === null) {
+      if (problems.length < 50) problems.push({ row: r + 1, why: !rec.d ? 'date not readable' : !rec.b ? 'no bill number' : !rec.s ? 'no distributor' : !n ? 'no medicine name' : 'quantity not a number', value: row });
+      continue;
+    }
+    out.push(rec);
+    if (!first || rec.d < first) first = rec.d;
+    if (!last || rec.d > last) last = rec.d;
+    bills.add(rec.s + '|' + rec.b); dists.add(rec.s.toLowerCase());
+  }
+  return { rows: out, problems, headerRow,
+    summary: { lines: out.length, bills: bills.size, distributors: dists.size, firstDate: first, lastDate: last, problems: problems.length } };
+}
+
+export function parseDupes(rows) {
+  const { headerRow, map } = findColumns(rows, 'dupes');
+  const out = [];
+  for (let r = headerRow + 1; r < rows.length; r++) {
+    const row = rows[r] || [];
+    const n = text(row[map.name]);
+    if (isJunk(n)) continue;
+    out.push({ n, p: text(row[map.pack]), x: text(row[map.decision]) });
+  }
+  return { rows: out, problems: [], headerRow };
+}
+
 export const parseStock = (rows) => parseThreeColumns(rows, 'stock', 'Stock in loose');
 export const parseItemMaster = (rows) => parseThreeColumns(rows, 'items', 'Qty in Loose');
 
@@ -217,6 +272,6 @@ export function pickSheet(XLSX, wb, kind) {
 export function parseWorkbook(XLSX, data, kind) {
   const wb = XLSX.read(data, { type: 'array', cellDates: false, cellFormula: false, cellHTML: false, cellStyles: false });
   const { sheet, rows } = pickSheet(XLSX, wb, kind);
-  const parser = { sales: parseSales, stock: parseStock, items: parseItemMaster }[kind];
+  const parser = { sales: parseSales, stock: parseStock, items: parseItemMaster, purchase: parsePurchase, dupes: parseDupes }[kind];
   return { sheet, ...parser(rows) };
 }

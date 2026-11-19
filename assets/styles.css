@@ -183,3 +183,20 @@ main:has(.wide-page) { max-width: 1600px; }
 .add-res button:hover { background: var(--brand-soft); }
 .nowrap { white-space: nowrap; }
 details.note summary { color: var(--ink); }
+
+/* update 6 */
+.chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0 8px; }
+.chip { font: inherit; font-size: .85rem; border: 1px solid var(--line); background: #fff; border-radius: 99px; padding: 4px 12px; cursor: pointer; color: var(--ink); }
+.chip span { color: var(--muted); font-size: .8rem; margin-left: 2px; }
+.chip.on { background: var(--brand); border-color: var(--brand); color: #fff; }
+.chip.on span { color: #d8efe9; }
+.bounce-note { font-size: .78rem; color: var(--bad); font-weight: 600; margin-top: 2px; }
+.bounce-text { color: var(--bad); font-weight: 600; }
+.tbl tr.bounced-row td { background: var(--bad-soft); }
+.filters { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 4px 0 8px; }
+.filters input, .filters select { min-height: 34px; padding: 5px 8px; font-size: .88rem; }
+.filters input[type="search"] { min-width: 220px; }
+.modal.wide { max-width: 720px; }
+.modal-scroll { max-height: 55vh; overflow: auto; }
+.modal input.sup { width: 80px; min-height: 30px; text-align: right; }
+.cause { font-size: .8rem; background: var(--warn-soft); color: var(--warn); border-radius: 6px; padding: 2px 6px; margin: 2px 0; display: inline-block; }

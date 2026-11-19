@@ -17,6 +17,14 @@ export default {
         <div id="work"></div>
       </div>
       <div class="card">
+        <h3>Load the Duplicate Items sheet</h3>
+        <p class="muted">Columns: Item Name, Pack Size, decision. Medicines marked <b>discontinue</b> are flagged, and the purchase report
+          shows "Discontinued item bought" whenever one is purchased.</p>
+        <label class="drop" id="drop2"><input type="file" id="file2" accept=".xlsx,.xls,.csv" hidden>
+          <b>Choose the Duplicate Items Excel file</b><span class="muted">or the order sheet workbook — the right sheet is found automatically</span></label>
+        <div id="work2"></div>
+      </div>
+      <div class="card">
         <div class="tabs-inline">
           <button class="tab on" data-v="check">Needs checking</button>
           <button class="tab" data-v="all">All items</button>
@@ -56,6 +64,25 @@ export default {
       } catch (e) {
         work.innerHTML = `<div class="note error">${esc(e.message)}</div>`;
       }
+    }
+
+    // ---------------- Duplicate Items ----------------
+    const f2 = $('#file2', el), d2 = $('#drop2', el);
+    d2.ondragover = (e) => { e.preventDefault(); d2.classList.add('over'); };
+    d2.ondragleave = () => d2.classList.remove('over');
+    d2.ondrop = (e) => { e.preventDefault(); d2.classList.remove('over'); if (e.dataTransfer.files[0]) dupes(e.dataTransfer.files[0]); };
+    f2.onchange = () => f2.files[0] && dupes(f2.files[0]);
+    async function dupes(file) {
+      const work = $('#work2', el);
+      work.innerHTML = `<div class="progress-line">Reading ${esc(file.name)}…</div>`;
+      try {
+        const parsed = await readExcel(file, 'dupes');
+        const n = parsed.rows.filter((r) => /discontinu/i.test(r.x)).length;
+        if (!(await confirmBox({ title: 'Mark discontinued medicines?', html: `<p>Sheet <b>${esc(parsed.sheet)}</b>: ${fmtNum(n)} medicines marked "discontinue".</p>`, ok: 'Mark them' }))) { work.innerHTML = ''; return; }
+        const r = await sb.rpc('mark_discontinued', { p_rows: parsed.rows }).then(check);
+        work.innerHTML = `<div class="note ok"><b>Done.</b> ${fmtNum(r.marked)} medicines marked discontinued${r.added ? `, ${fmtNum(r.added)} added to the item master` : ''}.</div>`;
+      } catch (e) { work.innerHTML = `<div class="note error">${esc(e.message)}</div>`; }
+      f2.value = '';
     }
 
     // ---------------- lists ----------------

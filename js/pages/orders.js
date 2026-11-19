@@ -40,12 +40,13 @@ export default {
     const whSel = $('#wh', el);
     let rows = [], cfg = {}, tab = 'order', stockAt = null, extra = new Map();
     // extra: medicines added by hand to the order (item_id -> qty)
-    const qtyEdits = new Map(), unticked = new Set();
+    const qtyEdits = new Map(), unticked = new Set(), userTicked = new Set();
+    const grpFilter = new Set();   // Order Sheet group filter (empty = all)
     let more = false, dists = [];
     const distChoice = new Map();   // item_id -> distributor chosen on this screen
     try { more = localStorage.getItem('orderMoreCols') === '1'; } catch { /* ignore */ }
 
-    whSel.onchange = () => { rememberWarehouse(whSel.value); extra.clear(); qtyEdits.clear(); unticked.clear(); distChoice.clear(); load(); };
+    whSel.onchange = () => { rememberWarehouse(whSel.value); extra.clear(); qtyEdits.clear(); unticked.clear(); userTicked.clear(); distChoice.clear(); load(); };
     $('#recalc', el).onclick = () => load(true);
     $$('#tabs .tab', el).forEach((b) => (b.onclick = () => { tab = b.dataset.t; draw(); }));
 
@@ -75,16 +76,22 @@ export default {
       stockAt = up[0]?.created_at || null;
       const stockFile = up[0]?.file_name || '';
       rows = sheet.map((r) => {
-        const closing = r.closing === null ? (r.stock_flag === 'No conversion' ? null : 0) : Number(r.closing);
+        const counted = r.closing === null ? (r.stock_flag === 'No conversion' ? null : 0) : Number(r.closing);
+        // supplied quantities received after the stock upload count as stock
+        const recv = Number(r.recv_after_stock || 0);
+        const closing = counted === null ? null : counted + recv;
         const open = Number(r.open_qty || 0);
+        const bounced = Number(r.bounce_qty || 0) > 0;
         const level = { can_order: r.can_order, min_stock: r.min_stock, max_stock: r.max_stock, grp: r.grp };
         return {
-          ...r, closing, open,
+          ...r, counted, recv, closing, open, bounced,
           suggested: closing === null ? 0 : orderQty(level, closing, open, cfg),
           shelfDays: closing === null ? null : daysOnShelf(closing, Number(r.per_day || 0)),
-          orderedToday: Number(r.today_qty || 0) > 0,
+          orderedToday: Number(r.today_qty || 0) > 0 && !bounced,
         };
       });
+      // already ordered today: unticked unless someone ticked it on purpose
+      rows.forEach((r) => { if (r.orderedToday && !userTicked.has(r.item_id)) unticked.add(r.item_id); });
 
       // freshness box
       $('#fresh', el).innerHTML = st.run
@@ -120,10 +127,15 @@ export default {
         .sort((a, b) => reasonOrder(a) - reasonOrder(b) || a.name.localeCompare(b.name)),
     };
 
-    const grpCell = (r) => `${esc(r.grp)}${r.growing ? ' <span class="pill done">Growing</span>' : ''}`;
-    const todayNote = (r) => r.orderedToday
-      ? `<div class="today-note">Ordered today ${fmtDateTime(r.last_order_at).split(', ')[1] || ''} – ${fmtNum(r.today_qty, 2)} strips${r.last_order_by ? ` (${esc(r.last_order_by)})` : ''}${r.last_order_distributor ? `, ${esc(r.last_order_distributor)}` : ''}</div>` : '';
-    const stockCell = (r) => r.closing === null ? '<span class="pill warn">No conversion</span>' : fmtNum(r.closing, 2);
+    const grpCell = (r) => `${esc(r.grp)}${r.growing ? '<div><span class="pill done">Growing</span></div>' : ''}`;
+    const todayNote = (r) => r.bounced
+      ? `<div class="bounce-note">Bounced by ${esc(r.bounce_dist || 'distributor')}${r.bounce_at ? ` (${fmtDateTime(r.bounce_at)})` : ''} – ${fmtNum(r.bounce_qty, 2)} strips not supplied. Order from another distributor.</div>`
+      : r.orderedToday
+      ? `<div class="today-note">Ordered today ${fmtDateTime(r.last_order_at).split(', ')[1] || ''} – ${fmtNum(r.today_qty, 2)} strips${r.last_order_by ? ` (${esc(r.last_order_by)})` : ''}${r.last_order_distributor ? `, ${esc(r.last_order_distributor)}` : ''}${r.last_order_no ? ` · ${esc(r.last_order_no)}` : ''} · ${r.last_received ? 'received' : 'on order'}</div>` : '';
+    const stockCell = (r) => r.closing === null ? '<span class="pill warn">No conversion</span>'
+      : r.recv > 0 ? `${fmtNum(r.closing, 2)}<div class="small muted" title="counted + received after the stock upload">${fmtNum(r.counted, 2)} + ${fmtNum(r.recv, 2)} recd</div>` : fmtNum(r.closing, 2);
+    const GROUP_KEYS = ['Fast', 'Average', 'New', 'Slow (Regular)', 'Slow (Irregular)', 'Rare'];
+    const grpKey = (g) => (GROUP_KEYS.includes(g) ? g : 'Other');
 
     function draw() {
       $$('#tabs .tab', el).forEach((b) => b.classList.toggle('on', b.dataset.t === tab));
@@ -186,12 +198,21 @@ export default {
     }
 
     async function drawOrder(view) {
-      const list = pick.order();
+      const all = pick.order();
+      const list = all.filter((r) => !grpFilter.size || grpFilter.has(grpKey(r.grp)));
+      const grpCounts = {};
+      all.forEach((r) => { const k = grpKey(r.grp); grpCounts[k] = (grpCounts[k] || 0) + 1; });
       const leftOut = rows.filter((r) => r.orderedToday && r.suggested === 0 && !extra.has(r.item_id));
       dists = await sb.from('distributors').select('id, name').eq('active', true).order('name').then(check);
       const distOpts = (sel) => `<option value="">Choose…</option>${dists.map((d) => `<option value="${d.id}" ${String(d.id) === String(sel ?? '') ? 'selected' : ''}>${esc(d.name)}</option>`).join('')}${canPlace ? '<option value="new">+ Add distributor…</option>' : ''}`;
-      const distOf = (r) => distChoice.has(r.item_id) ? distChoice.get(r.item_id) : (r.usual_distributor_id ?? '');
+      // default distributor = the one last used, but never the one that just bounced it
+      const distOf = (r) => distChoice.has(r.item_id) ? distChoice.get(r.item_id)
+        : (r.bounced && r.usual_distributor_id === r.bounce_dist_id ? '' : (r.usual_distributor_id ?? ''));
       view.innerHTML = `
+        <div class="chips" id="grps">
+          <button class="chip ${grpFilter.size ? '' : 'on'}" data-g="">All <span>${fmtNum(all.length)}</span></button>
+          ${[...GROUP_KEYS, 'Other'].filter((g) => grpCounts[g]).map((g) => `<button class="chip ${grpFilter.has(g) ? 'on' : ''}" data-g="${esc(g)}">${esc(g)} <span>${fmtNum(grpCounts[g])}</span></button>`).join('')}
+        </div>
         <div class="row">
           <input type="search" id="q" placeholder="Search in this list…">
           <div class="add-box"><input type="search" id="addq" placeholder="+ Add another medicine…" autocomplete="off"><div id="addres" class="add-res"></div></div>
@@ -222,7 +243,7 @@ export default {
           <th class="num">Sold 7d</th><th class="num">Sold 30d</th><th class="num">Sold 60d</th>${M ? '<th class="num">Sold 90d</th>' : ''}<th>Last sold</th></tr>` +
           shown.slice(0, SHOW).map((r) => `<tr data-id="${r.item_id}" class="${r.orderedToday ? 'ordered' : ''} ${unticked.has(r.item_id) ? 'off' : ''}">
             <td><input type="checkbox" class="tick" ${unticked.has(r.item_id) ? '' : 'checked'}></td>
-            <td class="med"><b>${esc(r.name)}</b> <span class="muted">${esc(r.pack_size)}</span>${extra.has(r.item_id) && !r.suggested ? ' <span class="pill">added</span>' : ''}
+            <td class="med ${r.bounced ? 'bounced' : ''}"><b>${esc(r.name)}</b> <span class="muted">${esc(r.pack_size)}</span>${extra.has(r.item_id) && !r.suggested ? ' <span class="pill">added</span>' : ''}
               ${r.warning ? ` <span class="pill warn">${esc(r.warning)}</span>` : ''}${todayNote(r)}
               ${r.odd_note && /check/i.test(r.odd_note) ? `<div class="small muted">${esc(r.odd_note)}</div>` : ''}</td>
             <td class="nowrap">${grpCell(r)}</td>
@@ -238,7 +259,7 @@ export default {
         $$('input.qty', view).forEach((inp) => (inp.onchange = () => { qtyEdits.set(Number(inp.closest('tr').dataset.id), Math.max(Number(inp.value) || 0, 0)); summary(); }));
         $$('input.tick', view).forEach((cb) => (cb.onchange = () => {
           const id = Number(cb.closest('tr').dataset.id);
-          cb.checked ? unticked.delete(id) : unticked.add(id);
+          if (cb.checked) { unticked.delete(id); userTicked.add(id); } else { unticked.add(id); userTicked.delete(id); }
           cb.closest('tr').classList.toggle('off', !cb.checked); summary();
         }));
         $$('select.dist', view).forEach((sel) => (sel.onchange = async () => {
@@ -251,7 +272,11 @@ export default {
           distChoice.set(id, sel.value ? Number(sel.value) : '');
           sel.classList.toggle('empty', !sel.value); summary();
         }));
-        $('#all', view).onchange = (e) => { list.forEach((r) => (e.target.checked ? unticked.delete(r.item_id) : unticked.add(r.item_id))); paint(); summary(); };
+        $('#all', view).onchange = (e) => {
+          // "tick all" leaves out medicines already ordered today; tick those one by one
+          list.forEach((r) => { if (!e.target.checked) unticked.add(r.item_id); else if (!r.orderedToday || userTicked.has(r.item_id)) unticked.delete(r.item_id); });
+          paint(); summary();
+        };
       };
       const chosen = () => list.filter((r) => !unticked.has(r.item_id) && finalQty(r) > 0);
       const byDistributor = () => {
@@ -271,6 +296,11 @@ export default {
           ${canPlace ? `· <b>${[...g.keys()].filter(Boolean).length}</b> distributor(s)${missing ? ` · <span class="warn-text">${missing} without distributor</span>` : ''}` : ''}`;
       };
       $('#q', view).oninput = paint;
+      $$('#grps .chip', view).forEach((b) => (b.onclick = () => {
+        const g = b.dataset.g;
+        if (!g) grpFilter.clear(); else grpFilter.has(g) ? grpFilter.delete(g) : grpFilter.add(g);
+        drawOrder(view);
+      }));
       $('#moreCols', view).onchange = (e) => {
         more = e.target.checked;
         try { localStorage.setItem('orderMoreCols', more ? '1' : ''); } catch { /* ignore */ }
@@ -319,7 +349,7 @@ export default {
       };
 
       const distName = (id) => dists.find((d) => String(d.id) === String(id))?.name || 'No distributor';
-      const sheetFor = (when, dname, lines) => [[`Order — ${warehouseName(whSel.value)} — ${when} — ${dname}`], [],
+      const sheetFor = (when, dname, lines, no = '') => [[`${no ? `Order ${no}` : 'Order'} — ${warehouseName(whSel.value)} — ${when} — ${dname}`], [],
         ['Medicine Name', 'Pack Size', 'Qty (strips)'], ...lines.map((r) => [r.name, r.pack_size, finalQty(r)])];
 
       // Download without placing: one sheet per distributor
@@ -337,11 +367,14 @@ export default {
           if (!c.length) return toast('Nothing ticked to order', 'error');
           const groups = byDistributor();
           if (groups.has('')) return toast(`Choose a distributor for ${groups.get('').length} medicine(s) — they are marked in orange`, 'error');
+          const again = c.filter((r) => r.orderedToday);
           const ok = await confirmBox({
             title: 'Place these orders?',
             html: `<p><b>${fmtNum(c.length)}</b> medicines for <b>${esc(warehouseName(whSel.value))}</b>, split into <b>${groups.size}</b> order(s):</p>
                    <table class="tbl compact">${[...groups].map(([d, lines]) => `<tr><td>${esc(distName(d))}</td><td class="num">${lines.length} medicines</td>
                    <td class="num">${fmtNum(lines.reduce((a, r) => a + finalQty(r), 0))} strips</td></tr>`).join('')}</table>
+                   ${again.length ? `<div class="note warn"><b>${again.length}</b> of these were already ordered today:
+                     ${again.slice(0, 8).map((r) => esc(r.name)).join(', ')}${again.length > 8 ? '…' : ''}. Order them again?</div>` : ''}
                    <p class="muted small">Saved with your name and the time, so a later order today won't suggest the same medicines again.</p>`,
             ok: 'Place orders',
           });
@@ -353,8 +386,9 @@ export default {
               p_lines: c.map((r) => ({ item_id: r.item_id, qty: finalQty(r), suggested: r.suggested || null, distributor_id: Number(distOf(r)) })),
             }).then(check);
             const when = fmtDateTime(new Date());
-            const placed = [...groups].map(([d, lines]) => ({ d, lines, sheet: sheetFor(when, distName(d), lines) }));
-            extra.clear(); qtyEdits.clear(); unticked.clear(); distChoice.clear();
+            const noOf = Object.fromEntries(res.map((x) => [String(x.distributor_id), x.order_no]));
+            const placed = [...groups].map(([d, lines]) => ({ d, lines, no: noOf[String(d)] || '', sheet: sheetFor(when, distName(d), lines, noOf[String(d)]) }));
+            extra.clear(); qtyEdits.clear(); unticked.clear(); userTicked.clear(); distChoice.clear();
             showPlaced(placed, when, res.length);
             load();
           } catch (e) { toast(e.message, 'error'); $('#place', view).disabled = false; }
@@ -369,7 +403,7 @@ export default {
       wrap.className = 'modal-wrap';
       wrap.innerHTML = `<div class="modal"><h3>${n} order(s) placed</h3>
         <p class="muted small">Download each distributor's Excel and send it to them.</p>
-        <table class="tbl compact">${placed.map((p, i) => `<tr><td><b>${esc(distName0(p.d))}</b></td><td class="num">${p.lines.length} medicines</td>
+        <table class="tbl compact">${placed.map((p, i) => `<tr><td><b>${esc(p.no)}</b></td><td>${esc(distName0(p.d))}</td><td class="num">${p.lines.length} medicines</td>
           <td><button class="btn primary small" data-i="${i}">Download Excel</button></td></tr>`).join('')}</table>
         <div class="modal-actions"><button class="btn ghost" data-a="close">Done</button></div></div>`;
       document.body.appendChild(wrap);
@@ -377,7 +411,7 @@ export default {
         const i = e.target.closest('[data-i]')?.dataset.i;
         if (i !== undefined) {
           const p = placed[Number(i)];
-          downloadExcel(`Order ${warehouseName(whSel.value)} ${distName0(p.d)} ${when.replace(/[,:]/g, '')}.xlsx`, { Order: p.sheet });
+          downloadExcel(fileName(p.no, distName0(p.d)), { Order: p.sheet });
           e.target.textContent = 'Downloaded ✓';
         }
         if (e.target.closest('[data-a="close"]')) wrap.remove();
@@ -388,76 +422,163 @@ export default {
     // ---------------- Orders placed ----------------
     async function drawHistory(view) {
       view.innerHTML = '<div class="loading">Loading…</div>';
-      const since = new Date(Date.now() - 14 * 86400000).toISOString();
+      const H = drawHistory.f || (drawHistory.f = { from: isoDaysAgo(14), to: todayISO(), status: 'all', dist: '', by: '', q: '' });
       const [orders, dl, people] = await Promise.all([
-        sb.from('orders').select('*').eq('warehouse_id', Number(whSel.value)).gte('placed_at', since).order('placed_at', { ascending: false }).limit(200).then(check),
-        sb.from('distributors').select('id, name').then(check),
+        sb.from('orders').select('*').eq('warehouse_id', Number(whSel.value))
+          .gte('placed_at', `${H.from}T00:00:00+05:30`).lte('placed_at', `${H.to}T23:59:59+05:30`)
+          .order('placed_at', { ascending: false }).limit(1000).then(check),
+        sb.from('distributors').select('id, name').order('name').then(check),
         isRole('admin') ? sb.from('profiles').select('user_id, full_name').then(check) : Promise.resolve([]),
       ]);
+      // bounced lines per order, for the status and the bounce report
+      const ids = orders.map((o) => o.id);
+      const lines = ids.length ? await fetchLines(ids) : [];
+      const byOrder = new Map();
+      lines.forEach((l) => { if (!byOrder.has(l.order_id)) byOrder.set(l.order_id, []); byOrder.get(l.order_id).push(l); });
+      const bouncedLines = (o) => (byOrder.get(o.id) || []).filter((l) => l.bounced);
+
       const dn = Object.fromEntries(dl.map((d) => [d.id, d.name]));
       const pn = Object.fromEntries(people.map((p) => [p.user_id, p.full_name]));
       const nameOf = (o) => pn[o.placed_by] || (o.placed_by === state.profile.user_id ? state.profile.full_name : '');
-      const status = (o) => o.cancelled_at ? '<span class="pill failed">Cancelled</span>' : o.received_at ? '<span class="pill done">Received</span>'
+      const status = (o) => o.cancelled_at ? '<span class="pill failed">Cancelled</span>'
+        : o.received_at ? `<span class="pill done">Received</span>${o.received_source === 'purchase upload' ? '<div class="small muted">from purchase upload</div>' : ''}`
         : '<span class="pill running">On order</span>';
       const refs = (o) => o.invoice_no ? `<b>Inv ${esc(o.invoice_no)}</b><div class="small muted">${fmtDate(o.invoice_date)}${o.challan_no ? ` · Challan ${esc(o.challan_no)}` : ''}</div>`
         : o.challan_no ? `Challan ${esc(o.challan_no)}<div class="small warn-text">Invoice pending</div>` : '<span class="small warn-text">No invoice / challan yet</span>';
       const canRefs = isRole('admin', 'purchase');
-      const filterBox = `<select id="hf"><option value="all">All orders</option><option value="pending">Invoice pending</option>
-        <option value="open">On order (not received)</option></select>`;
-      view.innerHTML = `<div class="row">${filterBox}
-        <span class="muted small">Orders count as "on order" for ${cfg.order_open_days || 2} day(s), or until marked received. Last 14 days shown.</span></div>
+      const byIds = [...new Set(orders.map((o) => o.placed_by))];
+
+      view.innerHTML = `
+        <div class="filters">
+          <input type="search" id="hq" placeholder="Order no. / invoice / challan…" value="${esc(H.q)}">
+          <select id="hs">
+            ${[['all', 'All statuses'], ['open', 'On order'], ['received', 'Received'], ['cancelled', 'Cancelled'], ['pending', 'Invoice pending'], ['bounce', 'Has bounces']]
+              .map(([v, l]) => `<option value="${v}" ${H.status === v ? 'selected' : ''}>${l}</option>`).join('')}
+          </select>
+          <select id="hd"><option value="">All distributors</option>${dl.map((d) => `<option value="${d.id}" ${String(H.dist) === String(d.id) ? 'selected' : ''}>${esc(d.name)}</option>`).join('')}</select>
+          <select id="hb"><option value="">Placed by anyone</option>${byIds.map((u) => `<option value="${u}" ${H.by === u ? 'selected' : ''}>${esc(pn[u] || (u === state.profile.user_id ? state.profile.full_name : 'Team member'))}</option>`).join('')}</select>
+          <label class="small">From <input type="date" id="hf" value="${H.from}"></label>
+          <label class="small">To <input type="date" id="ht" value="${H.to}"></label>
+          <button class="btn ghost small" id="brep">Bounce report</button>
+        </div>
+        <p class="muted small">Orders count as "on order" for ${cfg.order_open_days || 2} day(s), or until received.</p>
         <div id="hl"></div><div id="lines"></div>`;
+
+      const shown = () => orders.filter((o) => {
+        const q = H.q.trim().toLowerCase();
+        if (q && ![o.order_no, o.invoice_no, o.challan_no].some((x) => (x || '').toLowerCase().includes(q))) return false;
+        if (H.dist && String(o.distributor_id) !== String(H.dist)) return false;
+        if (H.by && o.placed_by !== H.by) return false;
+        switch (H.status) {
+          case 'open': return !o.cancelled_at && !o.received_at;
+          case 'received': return !!o.received_at && !o.cancelled_at;
+          case 'cancelled': return !!o.cancelled_at;
+          case 'pending': return !o.cancelled_at && !o.invoice_no;
+          case 'bounce': return bouncedLines(o).length > 0;
+          default: return true;
+        }
+      });
       const paint = () => {
-        const f = $('#hf', view).value;
-        const shown = orders.filter((o) => f === 'all' || (f === 'pending' ? !o.cancelled_at && !o.invoice_no : !o.cancelled_at && !o.received_at));
-        $('#hl', view).innerHTML = shown.length ? `<div class="scroll"><table class="tbl">
-          <tr><th>Placed</th><th>By</th><th>Distributor</th><th class="num">Medicines</th><th class="num">Strips</th><th>Challan / Invoice</th><th>Note</th><th>Status</th><th></th></tr>
-          ${shown.map((o) => `<tr data-id="${o.id}"><td class="nowrap">${fmtDateTime(o.placed_at)}</td><td>${esc(nameOf(o))}</td><td><b>${esc(dn[o.distributor_id] || '—')}</b></td>
-            <td class="num">${fmtNum(o.lines)}</td><td class="num">${fmtNum(o.total_qty, 2)}</td><td>${refs(o)}</td><td>${esc(o.note || '')}</td><td>${status(o)}</td>
+        const list = shown();
+        $('#hl', view).innerHTML = list.length ? `<div class="scroll"><table class="tbl">
+          <tr><th>Order no.</th><th>Placed</th><th>By</th><th>Distributor</th><th class="num">Medicines</th><th class="num">Strips</th><th>Challan / Invoice</th><th>Status</th><th></th></tr>
+          ${list.map((o) => {
+            const bl = bouncedLines(o);
+            return `<tr data-id="${o.id}"><td class="nowrap"><b>${esc(o.order_no || '')}</b>${o.note ? `<div class="small muted">${esc(o.note)}</div>` : ''}</td>
+            <td class="nowrap">${fmtDateTime(o.placed_at)}</td><td>${esc(nameOf(o))}</td><td><b>${esc(dn[o.distributor_id] || '—')}</b></td>
+            <td class="num">${fmtNum(o.lines)}</td><td class="num">${fmtNum(o.total_qty, 2)}</td><td>${refs(o)}</td>
+            <td>${status(o)}${bl.length ? `<div class="small bounce-text">${bl.length} bounced</div>` : ''}</td>
             <td class="nowrap"><button class="btn ghost small view">Lines</button>
             ${canRefs && !o.cancelled_at ? `<button class="btn ghost small refs">${o.invoice_no || o.challan_no ? 'Edit invoice' : 'Add challan / invoice'}</button>` : ''}
-            ${!o.cancelled_at && !o.received_at ? '<button class="btn ghost small recv">Mark received</button><button class="btn ghost small canc">Cancel</button>' : ''}</td></tr>`).join('')}
-          </table></div>` : '<p class="muted">No orders here.</p>';
+            ${!o.cancelled_at ? `<button class="btn ghost small recv">${o.received_at ? 'Edit received' : 'Receive'}</button>` : ''}
+            ${!o.cancelled_at && !o.received_at ? '<button class="btn ghost small canc">Cancel</button>' : ''}</td></tr>`;
+          }).join('')}
+          </table></div><p class="muted small">${fmtNum(list.length)} order(s)</p>` : '<p class="muted">No orders match.</p>';
         wire();
       };
-      $('#hf', view).onchange = paint;
+      const reload = () => drawHistory(view);
+      $('#hq', view).oninput = (e) => { H.q = e.target.value; paint(); };
+      $('#hs', view).onchange = (e) => { H.status = e.target.value; paint(); };
+      $('#hd', view).onchange = (e) => { H.dist = e.target.value; paint(); };
+      $('#hb', view).onchange = (e) => { H.by = e.target.value; paint(); };
+      $('#hf', view).onchange = (e) => { H.from = e.target.value || isoDaysAgo(14); reload(); };
+      $('#ht', view).onchange = (e) => { H.to = e.target.value || todayISO(); reload(); };
+      $('#brep', view).onclick = () => bounceReport();
 
-      const lines = async (id) => sb.from('order_lines').select('item_id, qty, suggested_qty, items(name, pack_size)').eq('order_id', id).then(check)
-        .catch(async () => {
-          const l = await sb.from('order_lines').select('item_id, qty, suggested_qty').eq('order_id', id).then(check);
-          const it = await sb.from('items').select('id, name, pack_size').in('id', l.map((x) => x.item_id)).then(check);
-          const m = Object.fromEntries(it.map((i) => [i.id, i]));
-          return l.map((x) => ({ ...x, items: m[x.item_id] }));
-        });
       const orderOf = (b) => orders.find((x) => String(x.id) === b.closest('tr').dataset.id);
-
       function wire() {
-        $$('button.view', view).forEach((b) => (b.onclick = async () => {
-          const o = orderOf(b);
-          const ls = await lines(o.id);
-          const title = `Order — ${warehouseName(whSel.value)} — ${fmtDateTime(o.placed_at)} — ${dn[o.distributor_id] || ''}${o.invoice_no ? ` — Invoice ${o.invoice_no}` : o.challan_no ? ` — Challan ${o.challan_no}` : ''}`;
-          $('#lines', view).innerHTML = `<h3>${esc(title)}</h3>
-            <div class="row"><button class="btn ghost small" id="dlo">Download Excel</button></div>
-            <table class="tbl compact"><tr><th>Medicine</th><th>Pack</th><th class="num">Qty</th><th class="num">Suggested</th></tr>
-            ${ls.map((l) => `<tr><td>${esc(l.items?.name)}</td><td>${esc(l.items?.pack_size)}</td><td class="num">${fmtNum(l.qty, 2)}</td><td class="num">${fmtNum(l.suggested_qty, 2)}</td></tr>`).join('')}</table>`;
-          $('#dlo', view).onclick = () => downloadExcel(`Order ${warehouseName(whSel.value)} ${dn[o.distributor_id] || ''} ${fmtDateTime(o.placed_at).replace(/[,:]/g, '')}.xlsx`,
-            { Order: [[title], [], ['Medicine Name', 'Pack Size', 'Qty (strips)'], ...ls.map((l) => [l.items?.name, l.items?.pack_size, Number(l.qty)])] });
-          $('#lines', view).scrollIntoView({ behavior: 'smooth' });
-        }));
+        $$('button.view', view).forEach((b) => (b.onclick = () => showLines(orderOf(b))));
         $$('button.refs', view).forEach((b) => (b.onclick = () => editRefs(orderOf(b))));
-        $$('button.recv', view).forEach((b) => (b.onclick = () => setStatus(b, 'received', 'Marked received')));
-        $$('button.canc', view).forEach((b) => (b.onclick = () => setStatus(b, 'cancelled', 'Order cancelled')));
+        $$('button.recv', view).forEach((b) => (b.onclick = () => receive(orderOf(b))));
+        $$('button.canc', view).forEach((b) => (b.onclick = async () => {
+          if (!(await confirmBox({ title: 'Cancel this order?', html: '<p>Its medicines will no longer count as on order.</p>', ok: 'Cancel order', cancel: 'Keep', danger: true }))) return;
+          await sb.rpc('set_order_status', { p_order_id: Number(b.closest('tr').dataset.id), p_status: 'cancelled' }).then(check);
+          toast('Order cancelled'); afterChange();
+        }));
       }
-      const setStatus = async (b, s, msg) => {
-        if (s === 'cancelled' && !(await confirmBox({ title: 'Cancel this order?', html: '<p>Its medicines will no longer count as on order.</p>', ok: 'Cancel order', cancel: 'Keep', danger: true }))) return;
-        await sb.rpc('set_order_status', { p_order_id: Number(b.closest('tr').dataset.id), p_status: s }).then(check);
-        toast(msg); load().then(() => { tab = 'history'; draw(); });
-      };
+      const afterChange = () => load().then(() => { tab = 'history'; draw(); });
+
+      const titleOf = (o) => `Order ${o.order_no || ''} — ${warehouseName(whSel.value)} — ${fmtDateTime(o.placed_at)} — ${dn[o.distributor_id] || ''}${o.invoice_no ? ` — Invoice ${o.invoice_no}` : o.challan_no ? ` — Challan ${o.challan_no}` : ''}`;
+      async function showLines(o) {
+        const ls = byOrder.get(o.id) || [];
+        const levels = await groupsFor(ls.map((l) => l.item_id));
+        let g = '';
+        const paintLines = () => {
+          const sl = ls.filter((l) => !g || grpKey(levels[l.item_id] || '') === g);
+          $('#ltab', view).innerHTML = `<tr><th>Medicine</th><th>Pack</th><th>Group</th><th class="num">Ordered</th><th class="num">Supplied</th><th class="num">Suggested</th></tr>
+            ${sl.map((l) => `<tr class="${l.bounced ? 'bounced-row' : ''}"><td>${esc(l.name)}</td><td>${esc(l.pack_size)}</td><td>${esc(levels[l.item_id] || '')}</td>
+              <td class="num">${fmtNum(l.qty, 2)}</td><td class="num">${l.supplied_qty == null ? '—' : fmtNum(l.supplied_qty, 2)}${l.bounced ? ' <span class="pill failed">bounced</span>' : ''}</td>
+              <td class="num">${fmtNum(l.suggested_qty, 2)}</td></tr>`).join('')}`;
+        };
+        const gs = [...new Set(ls.map((l) => grpKey(levels[l.item_id] || '')))];
+        $('#lines', view).innerHTML = `<h3>${esc(titleOf(o))}</h3>
+          <div class="row"><select id="lg"><option value="">All groups</option>${gs.map((x) => `<option>${esc(x)}</option>`).join('')}</select>
+          <button class="btn ghost small" id="dlo">Download Excel</button></div><table class="tbl compact" id="ltab"></table>`;
+        $('#lg', view).onchange = (e) => { g = e.target.value; paintLines(); };
+        $('#dlo', view).onclick = () => downloadExcel(fileName(o.order_no, dn[o.distributor_id]),
+          { Order: [[titleOf(o)], [], ['Medicine Name', 'Pack Size', 'Qty (strips)', 'Supplied'], ...ls.map((l) => [l.name, l.pack_size, Number(l.qty), l.supplied_qty == null ? '' : Number(l.supplied_qty)])] });
+        paintLines();
+        $('#lines', view).scrollIntoView({ behavior: 'smooth' });
+      }
+
+      // Receive: supplied quantity per line; 0 = bounced
+      function receive(o) {
+        const ls = byOrder.get(o.id) || [];
+        const wrap = document.createElement('div');
+        wrap.className = 'modal-wrap';
+        wrap.innerHTML = `<form class="modal wide"><h3>Receive ${esc(o.order_no || '')} — ${esc(dn[o.distributor_id] || '')}</h3>
+          <p class="muted small">Change <b>Supplied</b> for anything that didn't come in full. Tick <b>Bounced</b> if it didn't come at all.
+            Bounced medicines go straight back on the Order Sheet so you can order them from another distributor.</p>
+          <div class="scroll modal-scroll"><table class="tbl compact"><tr><th>Medicine</th><th class="num">Ordered</th><th class="num">Supplied</th><th>Bounced</th></tr>
+          ${ls.map((l) => `<tr data-i="${l.item_id}"><td>${esc(l.name)} <span class="muted">${esc(l.pack_size)}</span></td><td class="num">${fmtNum(l.qty, 2)}</td>
+            <td class="num"><input type="number" class="sup" min="0" max="${l.qty}" step="any" value="${l.supplied_qty == null ? Number(l.qty) : Number(l.supplied_qty)}"></td>
+            <td><input type="checkbox" class="bnc" ${l.supplied_qty != null && Number(l.supplied_qty) === 0 ? 'checked' : ''}></td></tr>`).join('')}</table></div>
+          <div class="modal-actions"><button type="button" class="btn ghost" data-a="no">Cancel</button><button class="btn primary">Save — received</button></div></form>`;
+        document.body.appendChild(wrap);
+        $$('input.bnc', wrap).forEach((cb) => (cb.onchange = () => {
+          const tr = cb.closest('tr'), inp = $('input.sup', tr);
+          inp.value = cb.checked ? 0 : (ls.find((l) => String(l.item_id) === tr.dataset.i)?.qty || 0);
+        }));
+        $$('input.sup', wrap).forEach((inp) => (inp.oninput = () => { $('input.bnc', inp.closest('tr')).checked = Number(inp.value) === 0; }));
+        $('[data-a="no"]', wrap).onclick = () => wrap.remove();
+        $('form', wrap).onsubmit = async (e) => {
+          e.preventDefault();
+          const payload = $$('tr[data-i]', wrap).map((tr) => ({ item_id: Number(tr.dataset.i), supplied: Math.max(Number($('input.sup', tr).value) || 0, 0) }));
+          try {
+            await sb.rpc('receive_order', { p_order_id: o.id, p_lines: payload, p_source: 'manual' }).then(check);
+            const b = payload.filter((p) => p.supplied < Number(ls.find((l) => l.item_id === p.item_id)?.qty || 0)).length;
+            wrap.remove(); toast(b ? `Received. ${b} line(s) bounced or short — they are back on the Order Sheet.` : 'Received');
+            afterChange();
+          } catch (err) { toast(err.message, 'error'); }
+        };
+      }
+
       function editRefs(o) {
         const wrap = document.createElement('div');
         wrap.className = 'modal-wrap';
-        wrap.innerHTML = `<form class="modal"><h3>Challan / Invoice — ${esc(dn[o.distributor_id] || '')}</h3>
-          <p class="muted small">Order of ${fmtDateTime(o.placed_at)}, ${fmtNum(o.lines)} medicines. Enter the challan no. now if the invoice isn't ready; add the invoice no. later.</p>
+        wrap.innerHTML = `<form class="modal"><h3>Challan / Invoice — ${esc(o.order_no || '')}</h3>
+          <p class="muted small">${esc(dn[o.distributor_id] || '')}, ${fmtDateTime(o.placed_at)}, ${fmtNum(o.lines)} medicines. Enter the challan no. now if the invoice isn't ready; add the invoice no. later.
+            When the purchase file with this bill no. is uploaded, the order is received automatically and anything missing from the bill is marked bounced.</p>
           <label class="field"><span>Challan no.</span><input name="c" value="${esc(o.challan_no || '')}" autocomplete="off"></label>
           <label class="field"><span>Invoice no.</span><input name="i" value="${esc(o.invoice_no || '')}" autocomplete="off"></label>
           <label class="field"><span>Invoice date</span><input name="d" type="date" value="${o.invoice_date || todayISO()}"></label>
@@ -475,19 +596,73 @@ export default {
           } catch (err) { toast(err.message, 'error'); }
         };
       }
+
+      // Bounces per distributor for the chosen dates
+      function bounceReport() {
+        const stats = new Map();
+        for (const o of orders) {
+          if (o.cancelled_at || !o.received_at) continue;
+          const s = stats.get(o.distributor_id) || { orders: 0, lines: 0, strips: 0, bLines: 0, bStrips: 0 };
+          const ls = byOrder.get(o.id) || [];
+          s.orders++; s.lines += ls.length;
+          ls.forEach((l) => { s.strips += Number(l.qty); if (l.bounced) { s.bLines++; s.bStrips += Number(l.qty) - Number(l.supplied_qty || 0); } });
+          stats.set(o.distributor_id, s);
+        }
+        const rowsB = [...stats].map(([d, s]) => ({ d, ...s, pct: s.lines ? (100 * s.bLines) / s.lines : 0 })).sort((a, b) => b.pct - a.pct);
+        $('#lines', view).innerHTML = `<h3>Bounce report — ${fmtDate(H.from)} to ${fmtDate(H.to)} (received orders)</h3>
+          ${rowsB.length ? `<table class="tbl compact"><tr><th>Distributor</th><th class="num">Orders</th><th class="num">Lines</th><th class="num">Bounced lines</th><th class="num">Bounce %</th><th class="num">Strips not supplied</th></tr>
+          ${rowsB.map((r) => `<tr><td>${esc(dn[r.d] || '—')}</td><td class="num">${r.orders}</td><td class="num">${r.lines}</td><td class="num">${r.bLines}</td>
+            <td class="num"><b class="${r.pct >= 10 ? 'bounce-text' : ''}">${r.pct.toFixed(1)}%</b></td><td class="num">${fmtNum(r.bStrips, 2)}</td></tr>`).join('')}</table>`
+          : '<p class="muted">No received orders in these dates.</p>'}`;
+        $('#lines', view).scrollIntoView({ behavior: 'smooth' });
+      }
       paint();
+    }
+
+    async function fetchLines(ids) {
+      const out = [];
+      for (let i = 0; i < ids.length; i += 150) {
+        const part = await sb.from('order_lines').select('order_id, item_id, qty, suggested_qty, supplied_qty, bounced').in('order_id', ids.slice(i, i + 150)).then(check);
+        out.push(...part);
+      }
+      const itemIds = [...new Set(out.map((l) => l.item_id))];
+      const names = {};
+      for (let i = 0; i < itemIds.length; i += 300) {
+        const it = await sb.from('items').select('id, name, pack_size').in('id', itemIds.slice(i, i + 300)).then(check);
+        it.forEach((x) => (names[x.id] = x));
+      }
+      return out.map((l) => ({ ...l, name: names[l.item_id]?.name || '', pack_size: names[l.item_id]?.pack_size || '' }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+    }
+    async function groupsFor(itemIds) {
+      const g = {};
+      for (let i = 0; i < itemIds.length; i += 300) {
+        const lv = await sb.from('item_levels').select('item_id, grp').eq('warehouse_id', Number(whSel.value)).in('item_id', itemIds.slice(i, i + 300)).then(check);
+        lv.forEach((x) => (g[x.item_id] = x.grp));
+      }
+      return g;
     }
 
     await load();
   },
 };
 
+// "GC-201126-03 M-s Jai Medical Agency.xlsx"
+function fileName(no, dist) {
+  return `${no || 'Order'} ${String(dist || '').replace(/[\\/:*?"<>|]+/g, '-').replace(/\s+/g, ' ').trim()}.xlsx`;
+}
+
 // why a medicine from the stock upload is not on the Order Sheet
 function reason(r) {
   if (r.closing === null) return 'No loose-to-strip conversion — fix in Item master';
   if (!r.can_order) return r.why || 'No sales in the last year';
   if (r.open > 0 && r.closing + r.open >= r.min_stock) return `Already on order (${r.open})`;
+  if (r.recv > 0 && r.counted < r.min_stock) return `Received after the stock count (+${r.recv}) — now ${r.closing} ≥ Min ${r.min_stock}`;
   return `Enough stock (${r.closing} ≥ Min ${r.min_stock})`;
+}
+function isoDaysAgo(n) {
+  const d = new Date(Date.now() - n * 86400000);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 function reasonOrder(r) {
   const t = reason(r);
