@@ -31,6 +31,15 @@ export const COLUMNS = {
     amount: ['invamount', 'invoiceamount', 'totalinvoiceamount', 'amount', 'netamount'],
     qty:    ['qty', 'quantity', 'totalquantity', 'qtystrip'],
   },
+  details: {
+    name:         ['medicinename', 'medicinesname', 'itemname', 'productname', 'medicine'],
+    pack:         ['packsize', 'pack'],
+    category:     ['category', 'shopbycategory', 'medicinecategory'],
+    ailment:      ['typeofailment', 'ailment', 'ailmenttype', 'therapeuticailmenttype', 'therapeutictype'],
+    brand:        ['brandname', 'brand'],
+    manufacturer: ['manufacturer', 'manufacturername', 'companyname', 'company'],
+    chronic:      ['chronic', 'type', 'chronicacute'],
+  },
   dupes: {
     name:     ['itemname', 'medicinesname', 'medicinename', 'productname'],
     pack:     ['packsize', 'pack'],
@@ -49,7 +58,10 @@ const REQUIRED = {
   items: ['name', 'pack', 'loose'],
   purchase: ['date', 'bill', 'dist', 'name', 'pack', 'qty'],
   dupes: ['name', 'pack', 'decision'],
+  details: ['name', 'pack'],
 };
+// besides the required columns, a sheet must have at least one of these
+const ANY_OF = { details: ['category', 'ailment', 'brand', 'manufacturer', 'chronic'] };
 
 // Some exports have a title block above the real headings (row 7 in the
 // daily report), so look through the first 25 rows for the heading row.
@@ -65,7 +77,7 @@ export function findColumns(rows, kind) {
         if (idx !== -1) { map[field] = idx; break; }
       }
     }
-    if (REQUIRED[kind].every((f) => f in map)) return { headerRow: r, map };
+    if (REQUIRED[kind].every((f) => f in map) && (!ANY_OF[kind] || ANY_OF[kind].some((f) => f in map))) return { headerRow: r, map };
   }
   const want = REQUIRED[kind].map((f) => spec[f][0]).join(', ');
   throw new Error(`Could not find the column headings. The file needs columns like: ${want}.`);
@@ -242,6 +254,23 @@ export function parsePurchase(rows) {
     summary: { lines: out.length, bills: bills.size, distributors: dists.size, firstDate: first, lastDate: last, problems: problems.length } };
 }
 
+export function parseDetails(rows) {
+  const { headerRow, map } = findColumns(rows, 'details');
+  const out = [];
+  const col = (row, f) => (map[f] === undefined ? '' : text(row[map[f]]));
+  for (let r = headerRow + 1; r < rows.length; r++) {
+    const row = rows[r] || [];
+    const n = text(row[map.name]);
+    if (isJunk(n)) continue;
+    const c = col(row, 'category'), a = col(row, 'ailment'), b = col(row, 'brand'), m = col(row, 'manufacturer'), ch = col(row, 'chronic');
+    // "Both / General" in a Type column means not chronic
+    out.push({ n, p: text(row[map.pack]), c: c === '0' ? '' : c, a: a === '0' ? '' : a, b: b === '0' ? '' : b, m: m === '0' ? '' : m,
+      ch: /^chronic$/i.test(ch) ? 'yes' : /both|general|acute/i.test(ch) ? 'no' : ch });
+  }
+  const found = ['category', 'ailment', 'brand', 'manufacturer', 'chronic'].filter((f) => f in map);
+  return { rows: out, problems: [], headerRow, found };
+}
+
 export function parseDupes(rows) {
   const { headerRow, map } = findColumns(rows, 'dupes');
   const out = [];
@@ -272,6 +301,6 @@ export function pickSheet(XLSX, wb, kind) {
 export function parseWorkbook(XLSX, data, kind) {
   const wb = XLSX.read(data, { type: 'array', cellDates: false, cellFormula: false, cellHTML: false, cellStyles: false });
   const { sheet, rows } = pickSheet(XLSX, wb, kind);
-  const parser = { sales: parseSales, stock: parseStock, items: parseItemMaster, purchase: parsePurchase, dupes: parseDupes }[kind];
+  const parser = { sales: parseSales, stock: parseStock, items: parseItemMaster, purchase: parsePurchase, dupes: parseDupes, details: parseDetails }[kind];
   return { sheet, ...parser(rows) };
 }

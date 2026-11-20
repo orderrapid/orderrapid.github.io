@@ -32,12 +32,14 @@ export async function recalculate(warehouseId, onStatus) {
   // as of the morning after the last sales day — how the Python script sees it
   const asOf = addDays(salesUpTo, 1);
   onStatus?.('Reading sales…');
-  const [data, cfg] = await Promise.all([
+  const [data, cfg, chronicIds] = await Promise.all([
     sb.rpc('analysis_data', { p_warehouse_id: Number(warehouseId), p_as_of: asOf }).then(check),
     loadSettings(),
+    loadChronic(),
   ]);
   onStatus?.('Calculating Min / Max…');
-  const { rows } = calculateLevels(data, cfg);
+  // medicines marked Chronic in the item master: a new one is stocked after its first sale
+  const { rows } = calculateLevels(data, cfg, new Set(chronicIds));
   onStatus?.('Saving…');
   const slim = rows.map((r) => ({
     item_id: r.item_id, grp: r.grp, growing: r.growing, speed: r.speed, pattern: r.pattern, why: r.why,
@@ -51,4 +53,9 @@ export async function recalculate(warehouseId, onStatus) {
     p_warehouse_id: Number(warehouseId), p_as_of: asOf, p_sales_up_to: salesUpTo, p_rows: slim,
   }).then(check);
   return { count, salesUpTo, asOf };
+}
+
+async function loadChronic() {
+  try { return (await sb.rpc('chronic_items').then(check)) || []; }
+  catch { return []; }   // database not updated yet: no chronic list
 }

@@ -17,6 +17,15 @@ export default {
         <div id="work"></div>
       </div>
       <div class="card">
+        <h3>Load medicine details</h3>
+        <p class="muted">Columns: Medicine Name, Pack Size, Category, Type of Ailment, Brand Name, Manufacturer, Chronic (Yes / blank).
+          Any of the detail columns can be missing, and a blank cell never wipes what is already saved — so you can fill gaps over time.
+          Medicines marked <b>Chronic</b> are ordered after their first sale (instead of waiting for a second bill).</p>
+        <label class="drop" id="drop3"><input type="file" id="file3" accept=".xlsx,.xls,.csv" hidden>
+          <b>Choose the medicine details Excel file</b><span class="muted">or drag it here</span></label>
+        <div id="work3"></div>
+      </div>
+      <div class="card">
         <h3>Load the Duplicate Items sheet</h3>
         <p class="muted">Columns: Item Name, Pack Size, decision. Medicines marked <b>discontinue</b> are flagged, and the purchase report
           shows "Discontinued item bought" whenever one is purchased.</p>
@@ -64,6 +73,34 @@ export default {
       } catch (e) {
         work.innerHTML = `<div class="note error">${esc(e.message)}</div>`;
       }
+    }
+
+    // ---------------- medicine details ----------------
+    const f3 = $('#file3', el), d3 = $('#drop3', el);
+    d3.ondragover = (e) => { e.preventDefault(); d3.classList.add('over'); };
+    d3.ondragleave = () => d3.classList.remove('over');
+    d3.ondrop = (e) => { e.preventDefault(); d3.classList.remove('over'); if (e.dataTransfer.files[0]) details(e.dataTransfer.files[0]); };
+    f3.onchange = () => f3.files[0] && details(f3.files[0]);
+    async function details(file) {
+      const work = $('#work3', el);
+      work.innerHTML = `<div class="progress-line">Reading ${esc(file.name)}…</div>`;
+      try {
+        const parsed = await readExcel(file, 'details');
+        const label = { category: 'Category', ailment: 'Type of Ailment', brand: 'Brand Name', manufacturer: 'Manufacturer', chronic: 'Chronic' };
+        if (!(await confirmBox({ title: 'Load medicine details?', html: `<p>Sheet <b>${esc(parsed.sheet)}</b>: ${fmtNum(parsed.rows.length)} medicines.</p>
+            <p>Columns found: <b>${parsed.found.map((f) => label[f]).join(', ')}</b></p>
+            <p class="muted small">Blank cells keep what is already saved.</p>`, ok: 'Load' }))) { work.innerHTML = ''; f3.value = ''; return; }
+        let added = 0, updated = 0, chronic = 0;
+        for (let i = 0; i < parsed.rows.length; i += 5000) {
+          work.innerHTML = `<div class="progress-line">Saving… ${fmtNum(i)} of ${fmtNum(parsed.rows.length)}</div>`;
+          const r = await sb.rpc('import_item_details', { p_rows: parsed.rows.slice(i, i + 5000) }).then(check);
+          added += r.added; updated += r.updated; chronic = r.chronic;
+        }
+        work.innerHTML = `<div class="note ok"><b>Done.</b> ${fmtNum(updated)} medicines updated${added ? `, ${fmtNum(added)} new medicines added` : ''}.
+          ${fmtNum(chronic)} medicines are now marked Chronic. Min / Max will use this the next time it is worked out (Orders → Recalculate).</div>`;
+        toast('Medicine details loaded');
+      } catch (e) { work.innerHTML = `<div class="note error">${esc(e.message)}</div>`; }
+      f3.value = '';
     }
 
     // ---------------- Duplicate Items ----------------

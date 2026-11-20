@@ -42,6 +42,9 @@ export default {
     // extra: medicines added by hand to the order (item_id -> qty)
     const qtyEdits = new Map(), unticked = new Set(), userTicked = new Set();
     const grpFilter = new Set();   // Order Sheet group filter (empty = all)
+    const attr = { category: '', ailment: '', manufacturer: '', brand: '' };   // Order Sheet detail filters
+    const ATTR_LABEL = { category: 'Category', ailment: 'Ailment', manufacturer: 'Manufacturer', brand: 'Brand' };
+    const attrOk = (r) => Object.entries(attr).every(([k, v]) => !v || (r[k] || '(not set)') === v);
     let more = false, dists = [];
     const distChoice = new Map();   // item_id -> distributor chosen on this screen
     try { more = localStorage.getItem('orderMoreCols') === '1'; } catch { /* ignore */ }
@@ -127,7 +130,8 @@ export default {
         .sort((a, b) => reasonOrder(a) - reasonOrder(b) || a.name.localeCompare(b.name)),
     };
 
-    const grpCell = (r) => `${esc(r.grp)}${r.growing ? '<div><span class="pill done">Growing</span></div>' : ''}`;
+    const grpCell = (r) => `${esc(r.grp)}${r.growing ? '<div><span class="pill done">Growing</span></div>' : ''}${r.chronic
+      ? `<div><span class="pill chronic" title="Marked Chronic in the item master">${r.grp === 'New' && Number(r.total_bills || 0) < 2 ? 'Chronic – stocked after 1st sale' : 'Chronic'}</span></div>` : ''}`;
     const todayNote = (r) => r.bounced
       ? `<div class="bounce-note">Bounced by ${esc(r.bounce_dist || 'distributor')}${r.bounce_at ? ` (${fmtDateTime(r.bounce_at)})` : ''} – ${fmtNum(r.bounce_qty, 2)} strips not supplied. Order from another distributor.</div>`
       : r.orderedToday
@@ -198,8 +202,10 @@ export default {
     }
 
     async function drawOrder(view) {
-      const all = pick.order();
+      const all0 = pick.order();
+      const all = all0.filter(attrOk);
       const list = all.filter((r) => !grpFilter.size || grpFilter.has(grpKey(r.grp)));
+      const optsFor = (k) => [...new Set(all0.map((r) => r[k] || '(not set)'))].sort((a, b) => a.localeCompare(b));
       const grpCounts = {};
       all.forEach((r) => { const k = grpKey(r.grp); grpCounts[k] = (grpCounts[k] || 0) + 1; });
       const leftOut = rows.filter((r) => r.orderedToday && r.suggested === 0 && !extra.has(r.item_id));
@@ -212,6 +218,11 @@ export default {
         <div class="chips" id="grps">
           <button class="chip ${grpFilter.size ? '' : 'on'}" data-g="">All <span>${fmtNum(all.length)}</span></button>
           ${[...GROUP_KEYS, 'Other'].filter((g) => grpCounts[g]).map((g) => `<button class="chip ${grpFilter.has(g) ? 'on' : ''}" data-g="${esc(g)}">${esc(g)} <span>${fmtNum(grpCounts[g])}</span></button>`).join('')}
+        </div>
+        <div class="filters" id="attrs">
+          ${Object.keys(attr).map((k) => `<select data-k="${k}" class="${attr[k] ? 'set' : ''}"><option value="">All ${ATTR_LABEL[k].toLowerCase()}s</option>
+            ${optsFor(k).map((v) => `<option ${attr[k] === v ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select>`).join('')}
+          ${Object.values(attr).some(Boolean) ? '<button class="btn ghost small" id="clrA">Clear filters</button>' : ''}
         </div>
         <div class="row">
           <input type="search" id="q" placeholder="Search in this list…">
@@ -236,7 +247,7 @@ export default {
         const M = more;   // extra columns switched on?
         $('#t', view).innerHTML = `<tr><th><input type="checkbox" id="all" ${list.some((r) => !unticked.has(r.item_id)) ? 'checked' : ''} title="Tick / untick all"></th>
           <th>Medicine</th><th>Group</th>
-          ${M ? '<th>Trend</th><th class="num">Per day</th><th class="num">Normal sale</th><th class="num">Weeks /13</th>' : ''}
+          ${M ? '<th>Category</th><th>Manufacturer</th><th>Trend</th><th class="num">Per day</th><th class="num">Normal sale</th><th class="num">Weeks /13</th>' : ''}
           <th class="num">Min</th><th class="num">Max</th><th class="num">Stock</th><th class="num">On order</th><th class="num">Order Qty</th>
           ${canPlace ? '<th>Distributor</th>' : ''}
           ${M ? '<th class="num">Shelf days</th>' : ''}
@@ -247,7 +258,7 @@ export default {
               ${r.warning ? ` <span class="pill warn">${esc(r.warning)}</span>` : ''}${todayNote(r)}
               ${r.odd_note && /check/i.test(r.odd_note) ? `<div class="small muted">${esc(r.odd_note)}</div>` : ''}</td>
             <td class="nowrap">${grpCell(r)}</td>
-            ${M ? `<td class="small">${esc(r.speed || '')}</td><td class="num">${fmtNum(r.per_day, 2)}</td><td class="num">${fmtNum(r.normal_sale, 1)}</td><td class="num">${fmtNum(r.weeks_sold)}</td>` : ''}
+            ${M ? `<td class="small">${esc(r.category || '')}</td><td class="small">${esc(r.manufacturer || '')}</td><td class="small">${esc(r.speed || '')}</td><td class="num">${fmtNum(r.per_day, 2)}</td><td class="num">${fmtNum(r.normal_sale, 1)}</td><td class="num">${fmtNum(r.weeks_sold)}</td>` : ''}
             <td class="num">${fmtNum(r.min_stock)}</td><td class="num">${fmtNum(r.max_stock)}</td><td class="num">${stockCell(r)}</td>
             <td class="num">${r.open ? fmtNum(r.open, 2) : ''}</td>
             <td class="num"><input type="number" class="qty" min="0" step="1" value="${finalQty(r)}"></td>
@@ -296,6 +307,8 @@ export default {
           ${canPlace ? `· <b>${[...g.keys()].filter(Boolean).length}</b> distributor(s)${missing ? ` · <span class="warn-text">${missing} without distributor</span>` : ''}` : ''}`;
       };
       $('#q', view).oninput = paint;
+      $$('#attrs select', view).forEach((sel) => (sel.onchange = () => { attr[sel.dataset.k] = sel.value; drawOrder(view); }));
+      if ($('#clrA', view)) $('#clrA', view).onclick = () => { Object.keys(attr).forEach((k) => (attr[k] = '')); drawOrder(view); };
       $$('#grps .chip', view).forEach((b) => (b.onclick = () => {
         const g = b.dataset.g;
         if (!g) grpFilter.clear(); else grpFilter.has(g) ? grpFilter.delete(g) : grpFilter.add(g);
