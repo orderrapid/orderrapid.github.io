@@ -88,7 +88,8 @@ export default {
         const level = { can_order: r.can_order, min_stock: r.min_stock, max_stock: r.max_stock, grp: r.grp };
         return {
           ...r, counted, recv, closing, open, bounced,
-          suggested: closing === null ? 0 : orderQty(level, closing, open, cfg),
+          // discontinued for this warehouse (Duplicate Items list): never suggested
+          suggested: closing === null || r.disc ? 0 : orderQty(level, closing, open, cfg),
           shelfDays: closing === null ? null : daysOnShelf(closing, Number(r.per_day || 0)),
           orderedToday: Number(r.today_qty || 0) > 0 && !bounced,
         };
@@ -110,7 +111,7 @@ export default {
           Medicines not in that file are not checked.</span>${old ? '<br><b>This upload is not from today.</b> Upload a fresh stock file to check the latest.' : ''}`);
       }
       const noConv = rows.filter((r) => r.closing === null && r.can_order).length;
-      if (noConv) alerts.push(`<b>${noConv}</b> medicine(s) have stock but no loose-to-strip conversion, so they are left out of the order. ${isRole('admin') ? '<a href="#/items">Fix in Item master</a>' : 'Ask the Admin to fix them in Item master.'}`);
+      if (noConv) alerts.push(`<b>${noConv}</b> medicine(s) have stock but no loose-to-strip conversion, so they are left out of the order. ${isRole('admin', 'manager') ? '<a href="#/items">Fix in Item master</a>' : 'Ask the Admin or Manager to fix them in Item master.'}`);
       $('#alerts', el).innerHTML = alerts.map((a) => `<div class="note ${a.startsWith('<span class="info">') && !a.includes('not from today') ? '' : 'warn'}">${a}</div>`).join('');
       draw();
     }
@@ -119,11 +120,11 @@ export default {
     const pick = {
       order: () => rows.filter((r) => r.suggested > 0 || extra.has(r.item_id))
         .sort((a, b) => (GROUP_ORDER[a.grp] ?? 9) - (GROUP_ORDER[b.grp] ?? 9) || (b.qty_30 || 0) - (a.qty_30 || 0)),
-      decide: () => rows.filter((r) => r.grp === 'New' && !r.can_order && /decide by hand/.test(r.why || ''))
+      decide: () => rows.filter((r) => !r.disc && r.grp === 'New' && !r.can_order && /decide by hand/.test(r.why || ''))
         .sort((a, b) => (a.days_since ?? 999) - (b.days_since ?? 999)),
       over: () => rows.filter((r) => r.closing > 0 && r.shelfDays > (cfg.expiry_warning_days || 60))
         .sort((a, b) => b.shelfDays - a.shelfDays),
-      notorder: () => rows.filter((r) => !r.can_order && !/decide by hand/.test(r.why || ''))
+      notorder: () => rows.filter((r) => r.disc || (!r.can_order && !/decide by hand/.test(r.why || '')))
         .sort((a, b) => (a.days_since ?? 9999) - (b.days_since ?? 9999)),
       slow: () => rows.filter((r) => (r.grp || '').startsWith('Slow')).sort((a, b) => (b.qty_90 || 0) - (a.qty_90 || 0)),
       checked: () => rows.filter((r) => !(r.suggested > 0) && !extra.has(r.item_id))
@@ -159,7 +160,7 @@ export default {
         over: [['Medicine', (r) => esc(r.name)], ['Pack', (r) => esc(r.pack_size)], ['Group', grpCell], ['Stock', stockCell],
           ['Strips/day', (r) => fmtNum(r.per_day, 3)], ['Days on shelf', (r) => r.shelfDays === 999 ? 'Not selling' : fmtNum(r.shelfDays)],
           ['Max', (r) => fmtNum(r.max_stock)], ['Sold 90d', (r) => fmtNum(r.qty_90, 2)], ['Last sold', (r) => fmtDate(r.last_sold)]],
-        notorder: [['Medicine', (r) => esc(r.name)], ['Pack', (r) => esc(r.pack_size)], ['Why', (r) => esc(r.why || 'Not sold in the last year')],
+        notorder: [['Medicine', (r) => esc(r.name)], ['Pack', (r) => esc(r.pack_size)], ['Why', (r) => r.disc ? '<span class="pill failed">Discontinued</span> Duplicate Items list' : esc(r.why || 'Not sold in the last year')],
           ['Stock', stockCell], ['Last sold', (r) => fmtDate(r.last_sold)], ['Days since', (r) => fmtNum(r.days_since)]],
         slow: [['Medicine', (r) => esc(r.name)], ['Pack', (r) => esc(r.pack_size)], ['Group', grpCell], ['Weeks sold (of 13)', (r) => fmtNum(r.weeks_sold)],
           ['Normal sale', (r) => fmtNum(r.normal_sale, 1)], ['Min', (r) => fmtNum(r.min_stock)], ['Max', (r) => fmtNum(r.max_stock)],
@@ -667,6 +668,7 @@ function fileName(no, dist) {
 
 // why a medicine from the stock upload is not on the Order Sheet
 function reason(r) {
+  if (r.disc) return 'Discontinued (Duplicate Items list) — not ordered';
   if (r.closing === null) return 'No loose-to-strip conversion — fix in Item master';
   if (!r.can_order) return r.why || 'No sales in the last year';
   if (r.open > 0 && r.closing + r.open >= r.min_stock) return `Already on order (${r.open})`;

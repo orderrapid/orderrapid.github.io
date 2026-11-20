@@ -15,14 +15,14 @@ There is no build step: the files in this folder are the website.
 | Reports | everyone | By Category / Ailment / Manufacturer / Brand: Summary (sales, growth, purchases), Buying vs Selling (>120% flagged), Rising & Falling, Hourly sales |
 | Sales upload | Admin, Manager | Pick warehouse → upload Excel → check summary → confirm. Lines already uploaded are skipped; gaps in dates are warned about |
 | Stock | Admin, Purchase Team | Upload *Medicine Name, Pack Size, Stock in Loose*. Converted to strips using the item master. Items with no or wrong conversion are flagged |
-| Item master | Admin | Load the Strips sheet (*Item Name, Pack Size, Qty in Loose*). Fix conversions; busiest problem items first |
+| Item master | everyone views; Admin, Manager upload / edit | All medicines (search, counts, Excel), Needs checking, Upload history. Uploads: Strips sheet, Medicine details, Duplicate Items (discontinue per warehouse or all) |
 | Warehouses | Admin | Add, rename, switch off warehouses |
 | Users | Admin | Approve sign-ups, set roles, block users, **set a new password** for anyone who forgets |
 
 Coming in part 3: purchase import and the overstock report (repeat orders, duplicate codes, pack sizes).
 
 ## Database updates
-Run each file once, in order, in Supabase → SQL Editor: `01_schema.sql`, `02_sale_time.sql`, `03_orders.sql`, `04_check_upload.sql`, `05_distributor_invoice.sql`, `06_purchases_bounces.sql`, `07_categories_reports.sql`.
+Run each file once, in order, in Supabase → SQL Editor: `01_schema.sql`, `02_sale_time.sql`, `03_orders.sql`, `04_check_upload.sql`, `05_distributor_invoice.sql`, `06_purchases_bounces.sql`, `07_categories_reports.sql`, `08_item_master_view.sql`.
 All are safe to run again.
 
 ## One-time setup (about 20 minutes)
