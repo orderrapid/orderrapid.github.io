@@ -3,6 +3,7 @@ import { esc, $, $$, fmtDate, fmtDateTime, fmtNum, toast, confirmBox, promptBox,
 import { orderQty, daysOnShelf, GROUP_ORDER } from '../analysis.js';
 import { levelsStatus, recalculate, loadSettings } from '../levels.js';
 import { orderSheetFlags, bnsLabel } from '../bns.js';
+import { fmtH } from '../tat.js';
 
 const SHOW = 500;   // rows drawn per tab; the download has everything
 
@@ -47,7 +48,9 @@ export default {
     const attr = { category: '', ailment: '', manufacturer: '', brand: '' };   // Order Sheet detail filters
     const ATTR_LABEL = { category: 'Category', ailment: 'Ailment', manufacturer: 'Manufacturer', brand: 'Brand' };
     const attrOk = (r) => Object.entries(attr).every(([k, v]) => !v || (r[k] || '(not set)') === v);
-    let more = false, dists = [];
+    let more = false, dists = [], distTat = {};
+    // 'YYYY-MM-DDTHH:MM' in local time, for <input type=datetime-local>
+    const localInput = (d) => { const x = new Date(d); x.setMinutes(x.getMinutes() - x.getTimezoneOffset()); return x.toISOString().slice(0, 16); };
     const distChoice = new Map();   // item_id -> distributor chosen on this screen
     try { more = localStorage.getItem('orderMoreCols') === '1'; } catch { /* ignore */ }
 
@@ -224,8 +227,11 @@ export default {
       const grpCounts = {};
       all.forEach((r) => { const k = grpKey(r.grp); grpCounts[k] = (grpCounts[k] || 0) + 1; });
       const leftOut = rows.filter((r) => r.orderedToday && r.suggested === 0 && !extra.has(r.item_id));
-      dists = await sb.from('distributors').select('id, name').eq('active', true).order('name').then(check);
-      const distOpts = (sel) => `<option value="">Choose…</option>${dists.map((d) => `<option value="${d.id}" ${String(d.id) === String(sel ?? '') ? 'selected' : ''}>${esc(d.name)}</option>`).join('')}${canPlace ? '<option value="new">+ Add distributor…</option>' : ''}`;
+      [dists, distTat] = await Promise.all([
+        sb.from('distributors').select('id, name').eq('active', true).order('name').then(check),
+        sb.rpc('distributor_tat', { p_warehouse_id: Number(whSel.value) }).then(check).catch(() => ({})),   // usual delivery time
+      ]);
+      const distOpts = (sel) => `<option value="">Choose…</option>${dists.map((d) => `<option value="${d.id}" ${String(d.id) === String(sel ?? '') ? 'selected' : ''}>${esc(d.name)}${distTat[d.id] ? ` · avg ${fmtH(distTat[d.id].hours)}` : ''}</option>`).join('')}${canPlace ? '<option value="new">+ Add distributor…</option>' : ''}`;
       // default distributor = the one last used, but never the one that just bounced it
       const distOf = (r) => distChoice.has(r.item_id) ? distChoice.get(r.item_id)
         : (r.bounced && r.usual_distributor_id === r.bounce_dist_id ? '' : (r.usual_distributor_id ?? ''));
@@ -397,22 +403,33 @@ export default {
           const groups = byDistributor();
           if (groups.has('')) return toast(`Choose a distributor for ${groups.get('').length} medicine(s) — they are marked in orange`, 'error');
           const again = c.filter((r) => r.orderedToday);
+          // expected delivery per distributor: their usual time, or the overall average, or 24 h
+          const known = Object.values(distTat).map((x) => Number(x.hours));
+          const fallback = known.length ? known.reduce((a, b) => a + b, 0) / known.length : Number(cfg.tat_target_hours || 24);
+          const expected = new Map([...groups.keys()].map((d) => [String(d), localInput(Date.now() + (Number(distTat[d]?.hours) || fallback) * 3600000)]));
+          const onExp = (e) => { if (e.target.matches?.('input.exp-at')) expected.set(e.target.dataset.d, e.target.value); };
+          document.addEventListener('input', onExp);
           const ok = await confirmBox({
             title: 'Place these orders?',
             html: `<p><b>${fmtNum(c.length)}</b> medicines for <b>${esc(warehouseName(whSel.value))}</b>, split into <b>${groups.size}</b> order(s):</p>
-                   <table class="tbl compact">${[...groups].map(([d, lines]) => `<tr><td>${esc(distName(d))}</td><td class="num">${lines.length} medicines</td>
-                   <td class="num">${fmtNum(lines.reduce((a, r) => a + finalQty(r), 0))} strips</td></tr>`).join('')}</table>
+                   <table class="tbl compact"><tr><th>Distributor</th><th class="num">Medicines</th><th class="num">Strips</th><th>Expected by</th></tr>
+                   ${[...groups].map(([d, lines]) => `<tr><td>${esc(distName(d))}${distTat[d] ? `<div class="small muted">usually ${fmtH(distTat[d].hours)}</div>` : ''}</td><td class="num">${lines.length}</td>
+                   <td class="num">${fmtNum(lines.reduce((a, r) => a + finalQty(r), 0))}</td>
+                   <td><input type="datetime-local" class="exp-at" data-d="${d}" value="${expected.get(String(d))}"></td></tr>`).join('')}</table>
+                   <p class="muted small">Change "Expected by" if the distributor tells you a different time.</p>
                    ${again.length ? `<div class="note warn"><b>${again.length}</b> of these were already ordered today:
                      ${again.slice(0, 8).map((r) => esc(r.name)).join(', ')}${again.length > 8 ? '…' : ''}. Order them again?</div>` : ''}
                    <p class="muted small">Saved with your name and the time, so a later order today won't suggest the same medicines again.</p>`,
             ok: 'Place orders',
           });
+          document.removeEventListener('input', onExp);
           if (!ok) return;
           $('#place', view).disabled = true;
           try {
             const res = await sb.rpc('place_orders', {
               p_warehouse_id: Number(whSel.value), p_note: $('#note', view).value,
               p_lines: c.map((r) => ({ item_id: r.item_id, qty: finalQty(r), suggested: r.suggested || null, distributor_id: Number(distOf(r)) })),
+              p_expected: Object.fromEntries([...expected].filter(([, v]) => v).map(([d, v]) => [d, new Date(v).toISOString()])),
             }).then(check);
             const when = fmtDateTime(new Date());
             const noOf = Object.fromEntries(res.map((x) => [String(x.distributor_id), x.order_no]));
@@ -469,9 +486,14 @@ export default {
       const dn = Object.fromEntries(dl.map((d) => [d.id, d.name]));
       const pn = Object.fromEntries(people.map((p) => [p.user_id, p.full_name]));
       const nameOf = (o) => pn[o.placed_by] || (o.placed_by === state.profile.user_id ? state.profile.full_name : '');
+      const hrs = (a, b) => (Date.parse(b) - Date.parse(a)) / 3600000;
+      const clock = (iso) => fmtDateTime(iso);
       const status = (o) => o.cancelled_at ? '<span class="pill failed">Cancelled</span>'
-        : o.received_at ? `<span class="pill done">Received</span>${o.received_source === 'purchase upload' ? '<div class="small muted">from purchase upload</div>' : ''}`
-        : '<span class="pill running">On order</span>';
+        : o.received_at ? `<span class="pill done">Received</span>${o.received_source === 'purchase upload' ? '<div class="small muted">from purchase upload</div>' : ''}
+            ${o.arrived_at ? `<div class="small">Arrived ${clock(o.arrived_at)} · TAT ${fmtH(Math.max(0, hrs(o.placed_at, o.arrived_at)))}${o.expected_at && Date.parse(o.arrived_at) > Date.parse(o.expected_at) ? ` <span class="bounce-text">(late ${fmtH(hrs(o.expected_at, o.arrived_at))})</span>` : ''}</div>` : '<div class="small muted">no arrival time</div>'}`
+        : `<span class="pill running">On order</span>${o.expected_at ? (Date.parse(o.expected_at) < Date.now()
+            ? `<div class="small bounce-text"><b>Expected ${clock(o.expected_at)} · ${fmtH(hrs(o.expected_at, new Date().toISOString()))} late</b></div>`
+            : `<div class="small muted">Expected ${clock(o.expected_at)}</div>`) : ''}`;
       const refs = (o) => o.invoice_no ? `<b>Inv ${esc(o.invoice_no)}</b><div class="small muted">${fmtDate(o.invoice_date)}${o.challan_no ? ` · Challan ${esc(o.challan_no)}` : ''}</div>`
         : o.challan_no ? `Challan ${esc(o.challan_no)}<div class="small warn-text">Invoice pending</div>` : '<span class="small warn-text">No invoice / challan yet</span>';
       const canRefs = isRole('admin', 'purchase');
@@ -582,6 +604,8 @@ export default {
           ${ls.map((l) => `<tr data-i="${l.item_id}"><td>${esc(l.name)} <span class="muted">${esc(l.pack_size)}</span></td><td class="num">${fmtNum(l.qty, 2)}</td>
             <td class="num"><input type="number" class="sup" min="0" max="${l.qty}" step="any" value="${l.supplied_qty == null ? Number(l.qty) : Number(l.supplied_qty)}"></td>
             <td><input type="checkbox" class="bnc" ${l.supplied_qty != null && Number(l.supplied_qty) === 0 ? 'checked' : ''}></td></tr>`).join('')}</table></div>
+          <label class="field inline"><span>Goods arrived at</span><input type="datetime-local" name="arr" value="${localInput(o.arrived_at || Date.now())}" max="${localInput(Date.now() + 600000)}" required></label>
+          <p class="muted small">Change it if the goods came earlier than now — Turn Around Time uses this.</p>
           <div class="modal-actions"><button type="button" class="btn ghost" data-a="no">Cancel</button><button class="btn primary">Save — received</button></div></form>`;
         document.body.appendChild(wrap);
         $$('input.bnc', wrap).forEach((cb) => (cb.onchange = () => {
@@ -594,7 +618,8 @@ export default {
           e.preventDefault();
           const payload = $$('tr[data-i]', wrap).map((tr) => ({ item_id: Number(tr.dataset.i), supplied: Math.max(Number($('input.sup', tr).value) || 0, 0) }));
           try {
-            await sb.rpc('receive_order', { p_order_id: o.id, p_lines: payload, p_source: 'manual' }).then(check);
+            const arr = $('form', wrap).arr.value;
+            await sb.rpc('receive_order', { p_order_id: o.id, p_lines: payload, p_source: 'manual', p_arrived_at: arr ? new Date(arr).toISOString() : null }).then(check);
             const b = payload.filter((p) => p.supplied < Number(ls.find((l) => l.item_id === p.item_id)?.qty || 0)).length;
             wrap.remove(); toast(b ? `Received. ${b} line(s) bounced or short — they are back on the Order Sheet.` : 'Received');
             afterChange();
@@ -611,6 +636,7 @@ export default {
           <label class="field"><span>Challan no.</span><input name="c" value="${esc(o.challan_no || '')}" autocomplete="off"></label>
           <label class="field"><span>Invoice no.</span><input name="i" value="${esc(o.invoice_no || '')}" autocomplete="off"></label>
           <label class="field"><span>Invoice date</span><input name="d" type="date" value="${o.invoice_date || todayISO()}"></label>
+          ${!o.received_at ? `<label class="field"><span>Expected delivery</span><input name="x" type="datetime-local" value="${o.expected_at ? localInput(o.expected_at) : ''}"></label>` : ''}
           <div class="modal-actions"><button type="button" class="btn ghost" data-a="no">Cancel</button><button class="btn primary">Save</button></div></form>`;
         document.body.appendChild(wrap);
         const f = $('form', wrap);
@@ -620,6 +646,11 @@ export default {
           e.preventDefault();
           try {
             await sb.rpc('set_order_refs', { p_order_id: o.id, p_challan: f.c.value, p_invoice: f.i.value, p_invoice_date: f.i.value.trim() ? f.d.value : null }).then(check);
+            if (f.x && f.x.value !== (o.expected_at ? localInput(o.expected_at) : '')) {
+              const x = f.x.value ? new Date(f.x.value).toISOString() : null;
+              await sb.rpc('set_order_expected', { p_order_id: o.id, p_expected: x }).then(check);
+              o.expected_at = x;
+            }
             Object.assign(o, { challan_no: f.c.value.trim() || null, invoice_no: f.i.value.trim() || null, invoice_date: f.i.value.trim() ? f.d.value : null });
             wrap.remove(); toast('Saved'); paint();
           } catch (err) { toast(err.message, 'error'); }

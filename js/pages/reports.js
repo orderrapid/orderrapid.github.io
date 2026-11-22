@@ -1,8 +1,9 @@
 import { sb, check, state, rememberWarehouse, warehouseName } from '../db.js';
 import { esc, $, $$, fmtDate, fmtNum, warehouseOptions, downloadExcel, todayISO, addDays } from '../ui.js';
+import { drawTat } from '../tat.js';
 
 const BY = [['category', 'Category'], ['ailment', 'Type of Ailment'], ['manufacturer', 'Manufacturer'], ['brand', 'Brand']];
-const TABS = [['summary', 'Summary'], ['buysell', 'Buying vs Selling'], ['movers', 'Rising & Falling'], ['hourly', 'Hourly sales']];
+const TABS = [['summary', 'Summary'], ['buysell', 'Buying vs Selling'], ['movers', 'Rising & Falling'], ['hourly', 'Hourly sales'], ['tat', 'Turn Around Time']];
 const OVERBUY = 1.2;   // bought more than 120% of what was sold = flag
 
 const pct = (now, prev) => (prev > 0 ? ((now - prev) / prev) * 100 : now > 0 ? null : 0);
@@ -25,16 +26,16 @@ export default {
       <div class="card">
         <div class="filters">
           <label class="small">Warehouse <select id="wh">${warehouseOptions(state.warehouses, state.warehouseId)}</select></label>
-          <label class="small">Group by <select id="by">${BY.map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}</select></label>
-          <select id="preset">
+          <label class="small sales-only">Group by <select id="by">${BY.map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}</select></label>
+          <select id="preset" class="sales-only">
             <option value="30">Last 30 days</option><option value="7">Last 7 days</option><option value="90">Last 90 days</option>
             <option value="365">Last 365 days</option><option value="custom">Custom dates</option>
           </select>
-          <label class="small">From <input type="date" id="from"></label>
-          <label class="small">To <input type="date" id="to"></label>
-          <button class="btn ghost small" id="dl">Download Excel</button>
+          <label class="small sales-only">From <input type="date" id="from"></label>
+          <label class="small sales-only">To <input type="date" id="to"></label>
+          <button class="btn ghost small sales-only" id="dl">Download Excel</button>
         </div>
-        <p class="muted small" id="period"></p>
+        <p class="muted small sales-only" id="period"></p>
       </div>
       <div class="card">
         <div class="tabs-inline" id="tabs">${TABS.map(([k, l]) => `<button class="tab" data-t="${k}">${l}</button>`).join('')}</div>
@@ -57,7 +58,11 @@ export default {
     bySel.onchange = () => { hourGrp = ''; load(); };
     preset.onchange = () => { setPreset(); load(); };
     fromI.onchange = toI.onchange = () => { preset.value = 'custom'; load(); };
-    $$('#tabs .tab', el).forEach((b) => (b.onclick = () => { tab = b.dataset.t; draw(); }));
+    $$('#tabs .tab', el).forEach((b) => (b.onclick = () => {
+      const fromTat = tab === 'tat';
+      tab = b.dataset.t;
+      if (fromTat && tab !== 'tat') load(); else draw();   // sales data may not be loaded yet
+    }));
 
     const prevRange = () => {
       const days = Math.round((Date.parse(toI.value) - Date.parse(fromI.value)) / 86400000) + 1;
@@ -65,6 +70,7 @@ export default {
     };
 
     async function load() {
+      if (tab === 'tat') return draw();
       const view = $('#view', el);
       view.innerHTML = '<div class="loading">Loading…</div>';
       const args = { p_warehouse_id: Number(whSel.value), p_from: fromI.value, p_to: toI.value };
@@ -84,7 +90,10 @@ export default {
 
     function draw() {
       $$('#tabs .tab', el).forEach((b) => b.classList.toggle('on', b.dataset.t === tab));
+      // Turn Around Time has its own dates (orders, up to today)
+      $$('.sales-only', el).forEach((x) => (x.style.display = tab === 'tat' ? 'none' : ''));
       const view = $('#view', el);
+      if (tab === 'tat') return drawTat(view, whSel.value);
       if (tab === 'summary') return drawSummary(view);
       if (tab === 'buysell') return drawBuySell(view);
       if (tab === 'movers') return drawMovers(view);

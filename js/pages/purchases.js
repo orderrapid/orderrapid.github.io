@@ -84,7 +84,7 @@ export default {
       work.innerHTML = `<h3>Check before saving</h3>
         <div class="kv"><div><span>Sheet</span><b>${esc(parsed.sheet)}</b></div>
           <div><span>Dates</span><b>${fmtDate(s.firstDate)} → ${fmtDate(s.lastDate)}</b></div>
-          <div><span>Lines</span><b>${fmtNum(s.lines)}</b></div><div><span>Bills</span><b>${fmtNum(s.bills)}</b></div>
+          <div><span>Lines</span><b>${fmtNum(s.lines)}</b></div><div><span>Bills</span><b>${fmtNum(s.bills)}</b></div><div><span>Arrival time</span><b>${s.withArrival ? `${fmtNum(s.withArrival)} lines` : 'not in file'}</b></div>
           <div><span>Distributors</span><b>${fmtNum(s.distributors)}</b></div></div>
         ${warn.map((w) => `<div class="note warn">${w}</div>`).join('')}
         ${parsed.problems.length ? `<details><summary>Lines that could not be read</summary><table class="tbl compact">

@@ -225,3 +225,6 @@ details.note summary { color: var(--ink); }
 .field.inline { display: inline-flex; align-items: center; gap: 8px; margin-bottom: 8px; }
 .field.inline span { margin: 0; }
 .modal form, form.modal { max-height: 92vh; overflow: auto; }
+/* Turn Around Time report */
+#tout h3 { margin-top: 26px; }
+#tout h4 { margin: 18px 0 6px; }

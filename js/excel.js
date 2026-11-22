@@ -30,6 +30,9 @@ export const COLUMNS = {
     pack:   ['packsize', 'pack'],
     amount: ['invamount', 'invoiceamount', 'totalinvoiceamount', 'amount', 'netamount'],
     qty:    ['qty', 'quantity', 'totalquantity', 'qtystrip'],
+    // optional: when the goods arrived (from the purchase register) — used for Turn Around Time
+    arrival: ['arrivaltime', 'arrivaldatetime', 'arrivedat', 'entrytime', 'entrydatetime', 'receivedtime', 'receiveddatetime',
+              'receivedat', 'inwardtime', 'inwarddatetime', 'grntime', 'grndatetime', 'deliverytime', 'deliverydatetime'],
   },
   details: {
     name:         ['medicinename', 'medicinesname', 'itemname', 'productname', 'medicine'],
@@ -241,6 +244,13 @@ export function parsePurchase(rows) {
       n, p: text(row[map.pack]), q: toNumber(row[map.qty]),
       a: map.amount !== undefined ? toNumber(row[map.amount]) : null,
     };
+    // arrival time: a date+time, or just a time (then the bill date is used). Indian time.
+    if (map.arrival !== undefined && rec.d) {
+      const v = row[map.arrival], tm = toTime(v);
+      const whole = typeof v === 'number' && Number.isInteger(v);   // a date with no time
+      const day = typeof v === 'number' && v < 1 ? null : toISODate(v);   // time-only cells: use the bill date
+      if (tm && !whole) rec.t = `${day && day >= '2000' ? day : rec.d}T${tm}+05:30`;
+    }
     if (!rec.d || !rec.b || !rec.s || !n || rec.q === null) {
       if (problems.length < 50) problems.push({ row: r + 1, why: !rec.d ? 'date not readable' : !rec.b ? 'no bill number' : !rec.s ? 'no distributor' : !n ? 'no medicine name' : 'quantity not a number', value: row });
       continue;
@@ -251,7 +261,8 @@ export function parsePurchase(rows) {
     bills.add(rec.s + '|' + rec.b); dists.add(rec.s.toLowerCase());
   }
   return { rows: out, problems, headerRow,
-    summary: { lines: out.length, bills: bills.size, distributors: dists.size, firstDate: first, lastDate: last, problems: problems.length } };
+    summary: { lines: out.length, bills: bills.size, distributors: dists.size, firstDate: first, lastDate: last, problems: problems.length,
+      withArrival: out.filter((x) => x.t).length } };
 }
 
 export function parseDetails(rows) {
