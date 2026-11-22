@@ -1,5 +1,6 @@
 import { sb, check, state, rememberWarehouse, warehouseName } from '../db.js';
 import { buildReport } from '../repeats.js';
+import { dataTools } from '../datatools.js';
 import { esc, $, $$, fmtDate, fmtDateTime, fmtNum, toast, confirmBox, readExcel, warehouseOptions, downloadExcel, todayISO, addDays } from '../ui.js';
 
 const BATCH = 2500;
@@ -35,7 +36,8 @@ export default {
           <button class="btn ghost small" id="rdl">Download Excel</button>
         </div>
         <div id="report"><div class="loading">Loading…</div></div>
-      </div>`;
+      </div>
+      <div class="card" id="dtools"></div>`;
 
     const whSel = $('#wh', el);
     let status = [], rep = { same: [], multi: [] }, rtab = 'same';
@@ -47,6 +49,7 @@ export default {
         : `<span class="label">No purchases uploaded yet for ${esc(warehouseName(whSel.value))}</span>`;
     };
     whSel.onchange = () => { rememberWarehouse(whSel.value); $('#work', el).innerHTML = ''; showStatus(); loadReport(); };
+    dataTools($('#dtools', el), 'purchases', () => { showStatus(); loadReport(); });
 
     $('#sample', el).onclick = (e) => {
       e.preventDefault();

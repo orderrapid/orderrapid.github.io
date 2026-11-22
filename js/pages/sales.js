@@ -1,5 +1,6 @@
 import { sb, check, state, rememberWarehouse, warehouseName } from '../db.js';
 import { recalculate } from '../levels.js';
+import { dataTools } from '../datatools.js';
 import { esc, $, fmtDate, fmtDateTime, fmtNum, toast, confirmBox, readExcel, warehouseOptions, addDays, downloadExcel } from '../ui.js';
 
 const BATCH = 2500;
@@ -24,6 +25,7 @@ export default {
         <p class="small"><a href="#" id="sample">Download sample format</a></p>
         <div id="work"></div>
       </div>
+      <div class="card" id="dtools"></div>
       <div class="card"><h3>Recent uploads</h3><div id="history" class="loading">Loading…</div></div>`;
 
     const whSel = $('#wh', el);
@@ -40,6 +42,11 @@ export default {
     whSel.onchange = () => { rememberWarehouse(whSel.value); showStatus(); $('#work', el).innerHTML = ''; };
     await showStatus();
     loadHistory(el);
+    // after a delete: new "uploaded up to", and Min / Max from what is left
+    dataTools($('#dtools', el), 'sales', async (whId) => {
+      await showStatus();
+      recalculate(whId).catch(() => { /* Orders recalculates when opened */ });
+    });
 
     $('#sample', el).onclick = (e) => {
       e.preventDefault();
