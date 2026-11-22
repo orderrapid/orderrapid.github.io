@@ -2,6 +2,7 @@ import { sb, check, state, rememberWarehouse, warehouseName, isRole } from '../d
 import { esc, $, $$, fmtDate, fmtDateTime, fmtNum, toast, confirmBox, promptBox, warehouseOptions, downloadExcel, todayISO } from '../ui.js';
 import { orderQty, daysOnShelf, GROUP_ORDER } from '../analysis.js';
 import { levelsStatus, recalculate, loadSettings } from '../levels.js';
+import { orderSheetFlags, bnsLabel } from '../bns.js';
 
 const SHOW = 500;   // rows drawn per tab; the download has everything
 
@@ -41,6 +42,7 @@ export default {
     let rows = [], cfg = {}, tab = 'order', stockAt = null, extra = new Map();
     // extra: medicines added by hand to the order (item_id -> qty)
     const qtyEdits = new Map(), unticked = new Set(), userTicked = new Set();
+    let flags = { mode: 'warn', days: 30, flags: new Map(), blocks: new Map() };
     const grpFilter = new Set();   // Order Sheet group filter (empty = all)
     const attr = { category: '', ailment: '', manufacturer: '', brand: '' };   // Order Sheet detail filters
     const ATTR_LABEL = { category: 'Category', ailment: 'Ailment', manufacturer: 'Manufacturer', brand: 'Brand' };
@@ -68,11 +70,13 @@ export default {
           $('#alerts', el).innerHTML = `<div class="note error">Could not recalculate: ${esc(e.message)}</div>`;
         }
       }
-      const [sheet, up] = await Promise.all([
+      const [sheet, up, fl] = await Promise.all([
         sb.rpc('order_sheet', { p_warehouse_id: Number(wh) }).then(check),
         sb.from('stock_uploads').select('created_at, file_name').eq('warehouse_id', Number(wh))
           .order('created_at', { ascending: false }).limit(1).then(check),
+        orderSheetFlags(wh, cfg),
       ]);
+      flags = fl;
       // levels saved before Sold 7d / 60d existed: work them out once more
       const withLevels = sheet.filter((r) => r.grp !== 'Not sold');
       if (!force && withLevels.length && withLevels.every((r) => r.qty_7 == null)) return load(true);
@@ -92,7 +96,14 @@ export default {
           suggested: closing === null || r.disc ? 0 : orderQty(level, closing, open, cfg),
           shelfDays: closing === null ? null : daysOnShelf(closing, Number(r.per_day || 0)),
           orderedToday: Number(r.today_qty || 0) > 0 && !bounced,
+          bns: flags.flags.get(r.item_id) || null,      // bought often, hardly selling
+          blocked: flags.blocks.get(r.item_id) || null,  // blocked by Admin: can't be ordered
         };
+      });
+      // blocked: always unticked. Buying-not-selling: unticked only if Admin chose "Warn and untick".
+      rows.forEach((r) => {
+        if (r.blocked) { unticked.add(r.item_id); userTicked.delete(r.item_id); }
+        else if (r.bns && flags.mode === 'untick' && !userTicked.has(r.item_id)) unticked.add(r.item_id);
       });
       // already ordered today: unticked unless someone ticked it on purpose
       rows.forEach((r) => { if (r.orderedToday && !userTicked.has(r.item_id)) unticked.add(r.item_id); });
@@ -137,6 +148,9 @@ export default {
       ? `<div class="bounce-note">Bounced by ${esc(r.bounce_dist || 'distributor')}${r.bounce_at ? ` (${fmtDateTime(r.bounce_at)})` : ''} – ${fmtNum(r.bounce_qty, 2)} strips not supplied. Order from another distributor.</div>`
       : r.orderedToday
       ? `<div class="today-note">Ordered today ${fmtDateTime(r.last_order_at).split(', ')[1] || ''} – ${fmtNum(r.today_qty, 2)} strips${r.last_order_by ? ` (${esc(r.last_order_by)})` : ''}${r.last_order_distributor ? `, ${esc(r.last_order_distributor)}` : ''}${r.last_order_no ? ` · ${esc(r.last_order_no)}` : ''} · ${r.last_received ? 'received' : 'on order'}</div>` : '';
+    const flagNote = (r) => (r.blocked
+      ? `<div class="bounce-note">Blocked by Admin${r.blocked.reason ? `: ${esc(r.blocked.reason)}` : ''} — can't be ordered here</div>` : '')
+      + (r.bns ? `<div><span class="pill failed" title="See Purchases → Buying, not selling">${esc(bnsLabel(r.bns, flags.days))}</span></div>` : '');
     const stockCell = (r) => r.closing === null ? '<span class="pill warn">No conversion</span>'
       : r.recv > 0 ? `${fmtNum(r.closing, 2)}<div class="small muted" title="counted + received after the stock upload">${fmtNum(r.counted, 2)} + ${fmtNum(r.recv, 2)} recd</div>` : fmtNum(r.closing, 2);
     const GROUP_KEYS = ['Fast', 'Average', 'New', 'Slow (Regular)', 'Slow (Irregular)', 'Rare'];
@@ -150,11 +164,11 @@ export default {
       if (tab === 'order') return drawOrder(view);
       const list = pick[tab]();
       const cols = {
-        checked: [['Medicine', (r) => esc(r.name) + todayNote(r)], ['Pack', (r) => esc(r.pack_size)], ['Reason', (r) => esc(reason(r))],
+        checked: [['Medicine', (r) => esc(r.name) + todayNote(r) + flagNote(r)], ['Pack', (r) => esc(r.pack_size)], ['Reason', (r) => esc(reason(r))],
           ['Group', grpCell], ['Stock', stockCell], ['On order', (r) => r.open ? fmtNum(r.open, 2) : ''],
           ['Min', (r) => r.can_order ? fmtNum(r.min_stock) : ''], ['Max', (r) => r.can_order ? fmtNum(r.max_stock) : ''],
           ['Sold 30d', (r) => fmtNum(r.qty_30, 2)], ['Last sold', (r) => fmtDate(r.last_sold)]],
-        decide: [['Medicine', (r) => esc(r.name)], ['Pack', (r) => esc(r.pack_size)], ['Days selling', (r) => fmtNum(r.days_selling)],
+        decide: [['Medicine', (r) => esc(r.name) + flagNote(r)], ['Pack', (r) => esc(r.pack_size)], ['Days selling', (r) => fmtNum(r.days_selling)],
           ['Bills (360d)', (r) => fmtNum(r.total_bills)], ['Customers 30d', (r) => fmtNum(r.cust_30)], ['Normal sale', (r) => fmtNum(r.normal_sale, 1)],
           ['Sold 30d', (r) => fmtNum(r.qty_30, 2)], ['Stock', stockCell], ['Last sold', (r) => fmtDate(r.last_sold)], ['Days since', (r) => fmtNum(r.days_since)]],
         over: [['Medicine', (r) => esc(r.name)], ['Pack', (r) => esc(r.pack_size)], ['Group', grpCell], ['Stock', stockCell],
@@ -254,9 +268,9 @@ export default {
           ${M ? '<th class="num">Shelf days</th>' : ''}
           <th class="num">Sold 7d</th><th class="num">Sold 30d</th><th class="num">Sold 60d</th>${M ? '<th class="num">Sold 90d</th>' : ''}<th>Last sold</th></tr>` +
           shown.slice(0, SHOW).map((r) => `<tr data-id="${r.item_id}" class="${r.orderedToday ? 'ordered' : ''} ${unticked.has(r.item_id) ? 'off' : ''}">
-            <td><input type="checkbox" class="tick" ${unticked.has(r.item_id) ? '' : 'checked'}></td>
+            <td><input type="checkbox" class="tick" ${unticked.has(r.item_id) ? '' : 'checked'} ${r.blocked ? 'disabled title="Blocked by Admin"' : ''}></td>
             <td class="med ${r.bounced ? 'bounced' : ''}"><b>${esc(r.name)}</b> <span class="muted">${esc(r.pack_size)}</span>${extra.has(r.item_id) && !r.suggested ? ' <span class="pill">added</span>' : ''}
-              ${r.warning ? ` <span class="pill warn">${esc(r.warning)}</span>` : ''}${todayNote(r)}
+              ${r.warning ? ` <span class="pill warn">${esc(r.warning)}</span>` : ''}${todayNote(r)}${flagNote(r)}
               ${r.odd_note && /check/i.test(r.odd_note) ? `<div class="small muted">${esc(r.odd_note)}</div>` : ''}</td>
             <td class="nowrap">${grpCell(r)}</td>
             ${M ? `<td class="small">${esc(r.category || '')}</td><td class="small">${esc(r.manufacturer || '')}</td><td class="small">${esc(r.speed || '')}</td><td class="num">${fmtNum(r.per_day, 2)}</td><td class="num">${fmtNum(r.normal_sale, 1)}</td><td class="num">${fmtNum(r.weeks_sold)}</td>` : ''}
@@ -286,11 +300,11 @@ export default {
         }));
         $('#all', view).onchange = (e) => {
           // "tick all" leaves out medicines already ordered today; tick those one by one
-          list.forEach((r) => { if (!e.target.checked) unticked.add(r.item_id); else if (!r.orderedToday || userTicked.has(r.item_id)) unticked.delete(r.item_id); });
+          list.forEach((r) => { if (!e.target.checked || r.blocked) unticked.add(r.item_id); else if ((!r.orderedToday && !(r.bns && flags.mode === 'untick')) || userTicked.has(r.item_id)) unticked.delete(r.item_id); });
           paint(); summary();
         };
       };
-      const chosen = () => list.filter((r) => !unticked.has(r.item_id) && finalQty(r) > 0);
+      const chosen = () => list.filter((r) => !r.blocked && !unticked.has(r.item_id) && finalQty(r) > 0);
       const byDistributor = () => {
         const groups = new Map();
         for (const r of chosen()) {
@@ -354,6 +368,7 @@ export default {
           $('#addres', view).innerHTML = found.map((f) => `<button data-id="${f.id}">${esc(f.name)} <span class="muted">${esc(f.pack_size)}</span></button>`).join('') || '<div class="muted small">No match</div>';
           $$('#addres button', view).forEach((b) => (b.onclick = () => {
             const id = Number(b.dataset.id), f = found.find((x) => x.id === id);
+            if (flags.blocks.has(id)) { toast(`${f.name} is blocked by Admin for this warehouse`, 'error'); return; }
             if (!rows.find((r) => r.item_id === id)) rows.push({ item_id: id, name: f.name, pack_size: f.pack_size, grp: 'Not sold', suggested: 0, closing: 0, open: 0 });
             extra.set(id, 1); unticked.delete(id);
             $('#addq', view).value = ''; $('#addres', view).innerHTML = '';

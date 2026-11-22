@@ -14,6 +14,7 @@ There is no build step: the files in this folder are the website.
 | Orders | everyone (placing: Admin, Purchase Team) | Min / Max per medicine (same rules as MEDICINE ORDERING SHEET v4), Order Qty = Max − stock − already on order, place order + Excel, "ordered today" warnings; tabs New – Decide, Too Much Stock, Not Ordering, Slow Medicines, Orders placed |
 | Reports | everyone | By Category / Ailment / Manufacturer / Brand: Summary (sales, growth, purchases), Buying vs Selling (>120% flagged), Rising & Falling, Hourly sales |
 | Sales upload | Admin, Manager | Pick warehouse → upload Excel → check summary → confirm. Lines already uploaded are skipped; gaps in dates are warned about |
+| Buying, not selling | everyone (Admin: limits, block) | On Purchases: medicines bought on many bills / from several distributors while hardly selling, with the likely cause (duplicate code, not ordered in the app, discontinued). Order Sheet shows a red label; Admin can untick them by default or block a medicine per warehouse |
 | Download / delete | Admin, Manager (delete: Admin) | On Sales upload and Purchases: download any warehouse and dates in the upload format (sales with mobile numbers); Admin deletes a wrong upload by warehouse + dates after a preview and typing the warehouse name |
 | Stock | Admin, Purchase Team | Upload *Medicine Name, Pack Size, Stock in Loose*. Converted to strips using the item master. Items with no or wrong conversion are flagged |
 | Item master | everyone views; Admin, Manager upload / edit | All medicines (search, counts, Excel), Needs checking, Upload history. Uploads: Strips sheet, Medicine details, Duplicate Items (discontinue per warehouse or all) |
@@ -23,7 +24,7 @@ There is no build step: the files in this folder are the website.
 Coming in part 3: purchase import and the overstock report (repeat orders, duplicate codes, pack sizes).
 
 ## Database updates
-Run each file once, in order, in Supabase → SQL Editor: `01_schema.sql`, `02_sale_time.sql`, `03_orders.sql`, `04_check_upload.sql`, `05_distributor_invoice.sql`, `06_purchases_bounces.sql`, `07_categories_reports.sql`, `08_item_master_view.sql`, `09_delete_download.sql`.
+Run each file once, in order, in Supabase → SQL Editor: `01_schema.sql`, `02_sale_time.sql`, `03_orders.sql`, `04_check_upload.sql`, `05_distributor_invoice.sql`, `06_purchases_bounces.sql`, `07_categories_reports.sql`, `08_item_master_view.sql`, `09_delete_download.sql`, `10_buying_not_selling.sql`.
 All are safe to run again.
 
 ## One-time setup (about 20 minutes)

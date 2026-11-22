@@ -1,6 +1,8 @@
 import { sb, check, state, rememberWarehouse, warehouseName } from '../db.js';
 import { buildReport } from '../repeats.js';
 import { dataTools } from '../datatools.js';
+import { bnsCard } from '../bns.js';
+import { loadSettings } from '../levels.js';
 import { esc, $, $$, fmtDate, fmtDateTime, fmtNum, toast, confirmBox, readExcel, warehouseOptions, downloadExcel, todayISO, addDays } from '../ui.js';
 
 const BATCH = 2500;
@@ -37,6 +39,7 @@ export default {
         </div>
         <div id="report"><div class="loading">Loading…</div></div>
       </div>
+      <div class="card" id="bns"></div>
       <div class="card" id="dtools"></div>`;
 
     const whSel = $('#wh', el);
@@ -48,8 +51,9 @@ export default {
         ? `<span class="label">${esc(s.warehouse)}: purchases uploaded up to</span><span class="value">${fmtDate(s.last_date)}</span>`
         : `<span class="label">No purchases uploaded yet for ${esc(warehouseName(whSel.value))}</span>`;
     };
-    whSel.onchange = () => { rememberWarehouse(whSel.value); $('#work', el).innerHTML = ''; showStatus(); loadReport(); };
-    dataTools($('#dtools', el), 'purchases', () => { showStatus(); loadReport(); });
+    let loadBns = () => {};
+    whSel.onchange = () => { rememberWarehouse(whSel.value); $('#work', el).innerHTML = ''; showStatus(); loadReport(); loadBns(); };
+    dataTools($('#dtools', el), 'purchases', () => { showStatus(); loadReport(); loadBns(); });
 
     $('#sample', el).onclick = (e) => {
       e.preventDefault();
@@ -113,7 +117,7 @@ export default {
           ${tot.matched ? `<br><b>${tot.matched}</b> app order(s) matched by bill no. and marked received; anything missing from the bill is marked bounced.` : ''}</div>`;
         toast('Purchases saved');
         fileInput.value = '';
-        showStatus(); loadReport();
+        showStatus(); loadReport(); loadBns();
       };
     }
 
@@ -168,6 +172,8 @@ export default {
 
     await showStatus();
     loadReport();
+    loadBns = bnsCard($('#bns', el), () => whSel.value, await loadSettings());
+    loadBns();
   },
 };
 
