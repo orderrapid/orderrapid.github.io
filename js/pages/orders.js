@@ -120,12 +120,17 @@ export default {
       const byId = new Map(rows.map((r) => [r.item_id, r]));
       for (const a of adminLines) {
         let r = byId.get(a.item_id);
+        const sh = a.sheet || {}, n = (v) => (v === null || v === undefined ? null : Number(v));
         if (!r) {
-          const strips = a.strips == null ? null : Number(a.strips);
+          // not in the stock file: the app's own figures if it has them, else the figures from Admin's sheet
+          const strips = a.strips != null ? Number(a.strips) : n(sh.closing);
           r = { item_id: a.item_id, name: a.name, pack_size: a.pack_size, grp: a.grp || 'Not sold', category: a.category, ailment: a.ailment,
-            brand: a.brand, manufacturer: a.manufacturer, chronic: a.chronic, min_stock: a.min_stock ?? 0, max_stock: a.max_stock ?? 0,
-            per_day: a.per_day, qty_7: a.qty_7, qty_30: a.qty_30, qty_60: a.qty_60, qty_90: a.qty_90, last_sold: a.last_sold,
+            brand: a.brand, manufacturer: a.manufacturer, chronic: a.chronic,
+            min_stock: a.min_stock ?? n(sh.min) ?? 0, max_stock: a.max_stock ?? n(sh.max) ?? 0,
+            per_day: a.per_day ?? (n(sh.s30) != null ? n(sh.s30) / 30 : null),
+            qty_7: a.qty_7 ?? n(sh.s7), qty_30: a.qty_30 ?? n(sh.s30), qty_60: a.qty_60, qty_90: a.qty_90, last_sold: a.last_sold,
             counted: strips, recv: 0, closing: strips, open: 0, adminOnly: true, suggested: 0,
+            stockFromSheet: a.strips == null && sh.closing != null,
             bns: flags.flags.get(a.item_id) || null, short: shortOf.get(a.item_id) || null, blocked: flags.blocks.get(a.item_id) || null };
           rows.push(r); byId.set(a.item_id, r);
         }
@@ -140,7 +145,8 @@ export default {
         if (r.blocked) { unticked.add(r.item_id); userTicked.delete(r.item_id); }
         else if (r.bns && flags.mode === 'untick' && !userTicked.has(r.item_id)) unticked.add(r.item_id);
         else if (r.short?.status === 'short' && !userTicked.has(r.item_id)) unticked.add(r.item_id);
-        else if (r.tag === 'dup' && !r.admin && !userTicked.has(r.item_id)) unticked.add(r.item_id);   // Admin's own lines stay ticked
+        // Check Duplicate: unticked until checked — unless it is an Admin line the app flagged on its own
+        else if (r.tag === 'dup' && (!r.admin || r.admin.tag === 'dup') && !userTicked.has(r.item_id)) unticked.add(r.item_id);
       });
       // already ordered today: unticked unless someone ticked it on purpose
       rows.forEach((r) => { if (r.orderedToday && !userTicked.has(r.item_id)) unticked.add(r.item_id); });
@@ -189,12 +195,13 @@ export default {
     const flagNote = (r) => (r.blocked
       ? `<div class="bounce-note">Blocked by Admin${r.blocked.reason ? `: ${esc(r.blocked.reason)}` : ''} — can't be ordered here</div>` : '')
       + (r.bns ? `<div><span class="pill failed" title="See Purchases → Buying, not selling">${esc(bnsLabel(r.bns, flags.days))}</span></div>` : '')
-      + (r.admin ? `<div class="admin-note">${r.adminOnly || !r.appSuggested ? '<b>Added by Admin</b>' : `<b>Admin: ${fmtNum(r.admin.qty)}</b> (app: ${fmtNum(r.appSuggested)})`}${r.admin.note ? ` — ${esc(r.admin.note)}` : ''}${isRole('admin') ? ' <button type="button" class="linkbtn inline arm">remove</button>' : ''}</div>` : '')
+      + (r.admin ? `<div class="admin-note">${r.adminOnly || !r.appSuggested ? '<b>Added by Admin</b>' : `<b>Admin: ${fmtNum(r.admin.qty)}</b> (app: ${fmtNum(r.appSuggested)})`}${r.admin.sheet?.s15 != null ? ` · 15 days sale ${fmtNum(r.admin.sheet.s15)}` : ''}${r.admin.note ? ` — ${esc(r.admin.note)}` : ''}${isRole('admin') ? ' <button type="button" class="linkbtn inline arm">remove</button>' : ''}</div>` : '')
       + (r.dupWith ? `<div class="short-note">Possible duplicate code: ${esc(r.dupWith.slice(0, 3).join(', '))}</div>` : '')
       + (r.short?.status === 'found'
         ? `<div class="found-note"><b>Available — order now.</b> Found by ${esc(r.short.found_by || '')}</div>`
         : r.short ? `<div class="short-note">Marked short ${fmtDateTime(r.short.last_mark)} by ${esc(r.short.by || '')} (Pharmarack ✓ Retailer Shakti ✓)${r.short.days > 1 ? ` · <b>${r.short.days} days</b>` : ''}${r.short.note ? ` — ${esc(r.short.note)}` : ''}</div>` : '');
-    const stockCell = (r) => r.adminOnly && r.closing === null ? '<span class="muted">not in stock file</span>' : r.closing === null ? '<span class="pill warn">No conversion</span>'
+    const stockCell = (r) => r.adminOnly && r.closing === null ? '<span class="muted">not in stock file</span>'
+      : r.stockFromSheet ? `${fmtNum(r.closing, 2)} <div class="small muted">from Admin sheet</div>` : r.closing === null ? '<span class="pill warn">No conversion</span>'
       : r.recv > 0 ? `${fmtNum(r.closing, 2)}<div class="small muted" title="counted + received after the stock upload">${fmtNum(r.counted, 2)} + ${fmtNum(r.recv, 2)} recd</div>` : fmtNum(r.closing, 2);
     const GROUP_KEYS = ['Fast', 'Average', 'New', 'Slow (Regular)', 'Slow (Irregular)', 'Rare'];
     const grpKey = (g) => (GROUP_KEYS.includes(g) ? g : 'Other');
@@ -550,9 +557,11 @@ export default {
       const wrap = document.createElement('div');
       wrap.className = 'modal-wrap';
       wrap.innerHTML = `<div class="modal wide"><h3>Upload order sheet — ${esc(warehouseName(whSel.value))}</h3>
-        <p class="muted small">Columns: <b>Medicine Name, Pack Size, Qty</b> (strips). Optional: <b>Tag</b> (Urgent / Regular / Rare / Check Duplicate — the app decides if blank),
-          <b>Distributor</b> (pre-selected for the team), <b>Note</b> (shown to the team, e.g. "Scheme 10+2 till 30 Nov").<br>
-          Your qty replaces the app's. New medicines are added. Lines stay on the Order Sheet until they are ordered, or you remove them.</p>
+        <p class="muted small">Columns: <b>Medicine Name, Pack Size, Closing Stock (Strip), Min, Max, Qty to Order, 7 Days Sale, 15 Days Sale, 30 Days Sale, Tag</b>.
+          Only Medicine Name, Pack Size and Qty to Order are required. Tag = Urgent / Regular / Rare / Check Duplicate (the app decides if blank).
+          Optional extra columns: Distributor (pre-selected for the team), Note (shown to the team).<br>
+          Lines with Qty to Order 0 or blank are skipped. Your qty replaces the app's; new medicines are added. Your stock, Min / Max and sales
+          are shown where the app has none of its own. Lines stay on the Order Sheet until they are ordered, or you remove them.</p>
         <p class="small"><a href="#" id="aoSample">Download sample format</a></p>
         <label class="drop"><input type="file" id="aoFile" accept=".xlsx,.xls,.csv" hidden><b>Choose the Excel file</b></label>
         <div id="aoWork"></div>
@@ -560,9 +569,12 @@ export default {
       document.body.appendChild(wrap);
       $('[data-a="no"]', wrap).onclick = () => wrap.remove();
       $('#aoSample', wrap).onclick = (e) => { e.preventDefault(); downloadExcel('Admin_order_sheet_sample.xlsx', { Order: [
-        ['Medicine Name', 'Pack Size', 'Qty', 'Tag', 'Distributor', 'Note'],
-        ['Naxdom 500 Tablet', '10 Tablet', 20, 'Urgent', 'Retailer Shakti', 'Short on Pharmarack'],
-        ['Dolo 650 Tablet', '15 Tablet', 100, 'Regular', 'ABC Pharma', 'Scheme 10+2 till 30 Nov']] }); };
+        ['Medicine Name', 'Pack Size', 'Closing Stock (Strip)', 'Min', 'Max', 'Qty to Order', '7 Days Sale', '15 Days Sale', '30 Days Sale', 'Tag'],
+        ['Naxdom 500 Tablet', '10 Tablet', 0, 4, 8, 8, 2, 4, 7, 'Urgent'],
+        ['Dolo 650 Tablet', '15 Tablet', 40, 60, 90, 50, 25, 48, 95, 'Regular'],
+        ['Liv 52 DS Tablet', '60 Tablet', 1, 1, 2, 1, 0, 1, 1, 'Rare'],
+        ['Telma 40mg Tab', '15 Tab', 3, 5, 8, 5, 2, 3, 6, 'Check Duplicate'],
+        ['Pan 40 Tablet', '15 Tablet', 30, 20, 30, 0, 10, 18, 35, '']] }); };
       $('#aoFile', wrap).onchange = async (e) => {
         const file = e.target.files[0]; if (!file) return;
         const work = $('#aoWork', wrap);
@@ -573,9 +585,9 @@ export default {
         const tags = {}; parsed.rows.forEach((x) => { const k = x.t || '(app decides)'; tags[k] = (tags[k] || 0) + 1; });
         work.innerHTML = `<div class="kv"><div><span>Sheet</span><b>${esc(parsed.sheet)}</b></div><div><span>Medicines</span><b>${fmtNum(parsed.rows.length)}</b></div>
             <div><span>Strips</span><b>${fmtNum(parsed.rows.reduce((t, x) => t + x.q, 0))}</b></div></div>
-          <p class="small">Optional columns found: <b>${parsed.found.length ? parsed.found.map((f) => ({ tag: 'Tag', dist: 'Distributor', note: 'Note' })[f]).join(', ') : 'none'}</b>
+          <p class="small">Other columns found: <b>${parsed.found.length ? parsed.found.map((f) => ({ tag: 'Tag', dist: 'Distributor', note: 'Note', closing: 'Closing Stock', min: 'Min', max: 'Max', s7: '7 Days Sale', s15: '15 Days Sale', s30: '30 Days Sale' })[f]).join(', ') : 'none'}</b>
             · Tags: ${Object.entries(tags).map(([k, n]) => `${esc(k)} ${n}`).join(', ')}</p>
-          ${parsed.problems.length ? `<div class="note warn">${parsed.problems.length} row(s) left out (quantity missing or 0).</div>` : ''}
+          ${parsed.skipped ? `<p class="small muted">${fmtNum(parsed.skipped)} line(s) with Qty to Order 0 or blank skipped.</p>` : ''}
           <div class="row"><button class="btn primary" id="aoGo" ${parsed.rows.length ? '' : 'disabled'}>Add to ${esc(warehouseName(whSel.value))} Order Sheet</button></div>`;
         $('#aoGo', wrap).onclick = async () => {
           $('#aoGo', wrap).disabled = true;

@@ -47,8 +47,15 @@ export const COLUMNS = {
   adminorder: {
     name: ['medicinename', 'medicinesname', 'itemname', 'productname', 'medicine'],
     pack: ['packsize', 'pack'],
-    qty:  ['qty', 'qtystrips', 'qtystrip', 'quantity', 'orderqty', 'orderquantity', 'ordqty'],
-    tag:  ['tag', 'priority', 'type', 'ordertype'],
+    qty:  ['qtytoorder', 'qtytobeordered', 'qty', 'qtystrips', 'qtystrip', 'quantity', 'orderqty', 'orderquantity', 'ordqty'],
+    tag:  ['tag', 'tags', 'priority', 'type', 'ordertype'],
+    // optional figures from Admin's sheet — used where the app has none (e.g. first-time medicines)
+    closing: ['closingstockstrip', 'closingstockstrips', 'closingstock', 'closing', 'stockstrip', 'stock'],
+    min:  ['min', 'minstock'],
+    max:  ['max', 'maxstock'],
+    s7:   ['7dayssale', '7daysale', '7dayssales', 'sale7days', 'sold7days'],
+    s15:  ['15dayssale', '15daysale', '15dayssales', 'sale15days', 'sold15days'],
+    s30:  ['30dayssale', '30daysale', '30dayssales', 'sale30days', 'sold30days'],
     dist: ['distributor', 'distributorname', 'supplier', 'suppliername', 'party', 'partyname'],
     note: ['note', 'notes', 'remark', 'remarks', 'scheme', 'offer'],
   },
@@ -295,19 +302,20 @@ export function parseDetails(rows) {
 export function parseAdminOrder(rows) {
   const { headerRow, map } = findColumns(rows, 'adminorder');
   const out = [], problems = [];
+  let skipped = 0;
   const col = (row, f) => (map[f] === undefined ? '' : text(row[map[f]]));
   for (let r = headerRow + 1; r < rows.length; r++) {
     const row = rows[r] || [];
     const n = text(row[map.name]);
     if (isJunk(n)) continue;
     const q = toNumber(row[map.qty]);
-    if (q === null || q <= 0) {
-      if (problems.length < 50) problems.push({ row: r + 1, why: 'quantity missing or 0', value: row });
-      continue;
-    }
-    out.push({ n, p: text(row[map.pack]), q, t: col(row, 'tag'), d: col(row, 'dist'), note: col(row, 'note') });
+    if (q === null || q <= 0) { skipped++; continue; }   // nothing to order on this line
+    const num = (f) => (map[f] === undefined ? null : toNumber(row[map[f]]));
+    out.push({ n, p: text(row[map.pack]), q, t: col(row, 'tag'), d: col(row, 'dist'), note: col(row, 'note'),
+      c: num('closing'), mn: num('min'), mx: num('max'), s7: num('s7'), s15: num('s15'), s30: num('s30') });
   }
-  return { rows: out, problems, headerRow, found: ['tag', 'dist', 'note'].filter((f) => f in map) };
+  return { rows: out, problems, skipped, headerRow,
+    found: ['tag', 'closing', 'min', 'max', 's7', 's15', 's30', 'dist', 'note'].filter((f) => f in map) };
 }
 
 export function parseDupes(rows) {
