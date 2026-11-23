@@ -228,3 +228,16 @@ details.note summary { color: var(--ink); }
 /* Turn Around Time report */
 #tout h3 { margin-top: 26px; }
 #tout h4 { margin: 18px 0 6px; }
+/* Short in market */
+.linkbtn { background: none; border: 0; padding: 0; margin-top: 2px; color: var(--muted); font-size: .78rem; text-decoration: underline; cursor: pointer; display: block; }
+.linkbtn:hover { color: var(--ink, inherit); }
+.short-note { font-size: .8rem; color: #8a5a00; margin-top: 2px; }
+.found-note { font-size: .8rem; color: #0b6b3a; margin-top: 2px; }
+/* Order Sheet tags */
+.chips .sep { display: inline-block; width: 1px; height: 22px; background: var(--line); margin: 0 6px; vertical-align: middle; }
+.pill.tag-urgent, .chip.tag-urgent.on { background: #fde2e1; color: #a12622; border-color: #f3b4b1; }
+.pill.tag-regular, .chip.tag-regular.on { background: #e3f0ff; color: #1d4f8c; border-color: #b9d4f5; }
+.pill.tag-rare, .chip.tag-rare.on { background: #eef0f2; color: #4b5560; border-color: #d3d8dd; }
+.pill.tag-dup, .chip.tag-dup.on { background: #fff1d6; color: #8a5a00; border-color: #f2d391; }
+.admin-note { font-size: .8rem; color: #4b2a8a; margin-top: 2px; }
+.linkbtn.inline { display: inline; margin: 0 0 0 4px; }

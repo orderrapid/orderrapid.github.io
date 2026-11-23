@@ -77,14 +77,14 @@ export function confirmBox({ title, html, ok = 'Continue', cancel = 'Cancel', da
 }
 
 // Ask for one value in a box (used for setting a password).
-export function promptBox({ title, label, type = 'text', ok = 'Save' }) {
+export function promptBox({ title, label, type = 'text', ok = 'Save', value = '' }) {
   return new Promise((resolve) => {
     const wrap = document.createElement('div');
     wrap.className = 'modal-wrap';
     wrap.innerHTML = `
       <form class="modal">
         <h3>${esc(title)}</h3>
-        <label class="field"><span>${esc(label)}</span><input name="v" type="${type}" required autocomplete="off"></label>
+        <label class="field"><span>${esc(label)}</span><input name="v" type="${type}" required autocomplete="off" value="${esc(value)}"></label>
         <div class="modal-actions">
           <button type="button" class="btn ghost" data-a="no">Cancel</button>
           <button class="btn primary">${esc(ok)}</button>

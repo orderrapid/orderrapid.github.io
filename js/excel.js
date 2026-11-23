@@ -43,6 +43,15 @@ export const COLUMNS = {
     manufacturer: ['manufacturer', 'manufacturername', 'companyname', 'company'],
     chronic:      ['chronic', 'type', 'chronicacute'],
   },
+  // Admin's own order sheet
+  adminorder: {
+    name: ['medicinename', 'medicinesname', 'itemname', 'productname', 'medicine'],
+    pack: ['packsize', 'pack'],
+    qty:  ['qty', 'qtystrips', 'qtystrip', 'quantity', 'orderqty', 'orderquantity', 'ordqty'],
+    tag:  ['tag', 'priority', 'type', 'ordertype'],
+    dist: ['distributor', 'distributorname', 'supplier', 'suppliername', 'party', 'partyname'],
+    note: ['note', 'notes', 'remark', 'remarks', 'scheme', 'offer'],
+  },
   dupes: {
     name:     ['itemname', 'medicinesname', 'medicinename', 'productname'],
     pack:     ['packsize', 'pack'],
@@ -61,6 +70,7 @@ const REQUIRED = {
   items: ['name', 'pack', 'loose'],
   purchase: ['date', 'bill', 'dist', 'name', 'pack', 'qty'],
   dupes: ['name', 'pack', 'decision'],
+  adminorder: ['name', 'pack', 'qty'],
   details: ['name', 'pack'],
 };
 // besides the required columns, a sheet must have at least one of these
@@ -282,6 +292,24 @@ export function parseDetails(rows) {
   return { rows: out, problems: [], headerRow, found };
 }
 
+export function parseAdminOrder(rows) {
+  const { headerRow, map } = findColumns(rows, 'adminorder');
+  const out = [], problems = [];
+  const col = (row, f) => (map[f] === undefined ? '' : text(row[map[f]]));
+  for (let r = headerRow + 1; r < rows.length; r++) {
+    const row = rows[r] || [];
+    const n = text(row[map.name]);
+    if (isJunk(n)) continue;
+    const q = toNumber(row[map.qty]);
+    if (q === null || q <= 0) {
+      if (problems.length < 50) problems.push({ row: r + 1, why: 'quantity missing or 0', value: row });
+      continue;
+    }
+    out.push({ n, p: text(row[map.pack]), q, t: col(row, 'tag'), d: col(row, 'dist'), note: col(row, 'note') });
+  }
+  return { rows: out, problems, headerRow, found: ['tag', 'dist', 'note'].filter((f) => f in map) };
+}
+
 export function parseDupes(rows) {
   const { headerRow, map } = findColumns(rows, 'dupes');
   const out = [];
@@ -312,6 +340,6 @@ export function pickSheet(XLSX, wb, kind) {
 export function parseWorkbook(XLSX, data, kind) {
   const wb = XLSX.read(data, { type: 'array', cellDates: false, cellFormula: false, cellHTML: false, cellStyles: false });
   const { sheet, rows } = pickSheet(XLSX, wb, kind);
-  const parser = { sales: parseSales, stock: parseStock, items: parseItemMaster, purchase: parsePurchase, dupes: parseDupes, details: parseDetails }[kind];
+  const parser = { sales: parseSales, stock: parseStock, items: parseItemMaster, purchase: parsePurchase, dupes: parseDupes, details: parseDetails, adminorder: parseAdminOrder }[kind];
   return { sheet, ...parser(rows) };
 }

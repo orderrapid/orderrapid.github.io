@@ -1,5 +1,5 @@
 import { sb, check, state, rememberWarehouse, warehouseName, isRole } from '../db.js';
-import { esc, $, $$, fmtDate, fmtDateTime, fmtNum, toast, confirmBox, promptBox, warehouseOptions, downloadExcel, todayISO } from '../ui.js';
+import { esc, $, $$, fmtDate, fmtDateTime, fmtNum, toast, confirmBox, promptBox, warehouseOptions, downloadExcel, todayISO, readExcel } from '../ui.js';
 import { orderQty, daysOnShelf, GROUP_ORDER } from '../analysis.js';
 import { levelsStatus, recalculate, loadSettings } from '../levels.js';
 import { orderSheetFlags, bnsLabel } from '../bns.js';
@@ -14,6 +14,7 @@ const TABS = [
   ['over', 'Too Much Stock'],
   ['notorder', 'Not Ordering'],
   ['slow', 'Slow Medicines'],
+  ['short', 'Short in market'],
   ['history', 'Orders placed'],
 ];
 
@@ -44,6 +45,11 @@ export default {
     // extra: medicines added by hand to the order (item_id -> qty)
     const qtyEdits = new Map(), unticked = new Set(), userTicked = new Set();
     let flags = { mode: 'warn', days: 30, flags: new Map(), blocks: new Map() };
+    let shortList = [], adminLines = [], dupOf = {};
+    // Order Sheet tags: Urgent / Regular / Rare / Check Duplicate, and where the line came from
+    let tagFilter = '', srcFilter = '';
+    const TAG_LABEL = { urgent: 'Urgent', regular: 'Regular', rare: 'Rare', dup: 'Check Duplicate' };
+    const TAG_ORDER = { urgent: 0, regular: 1, rare: 2, dup: 3 };
     const grpFilter = new Set();   // Order Sheet group filter (empty = all)
     const attr = { category: '', ailment: '', manufacturer: '', brand: '' };   // Order Sheet detail filters
     const ATTR_LABEL = { category: 'Category', ailment: 'Ailment', manufacturer: 'Manufacturer', brand: 'Brand' };
@@ -73,13 +79,19 @@ export default {
           $('#alerts', el).innerHTML = `<div class="note error">Could not recalculate: ${esc(e.message)}</div>`;
         }
       }
-      const [sheet, up, fl] = await Promise.all([
+      const [sheet, up, fl, sl, al, dc] = await Promise.all([
         sb.rpc('order_sheet', { p_warehouse_id: Number(wh) }).then(check),
         sb.from('stock_uploads').select('created_at, file_name').eq('warehouse_id', Number(wh))
           .order('created_at', { ascending: false }).limit(1).then(check),
         orderSheetFlags(wh, cfg),
+        sb.rpc('short_list', { p_warehouse_id: Number(wh), p_days: 14 }).then(check).catch(() => []),
+        sb.rpc('admin_order_open', { p_warehouse_id: Number(wh) }).then(check).catch(() => []),
+        sb.rpc('dup_candidates', { p_warehouse_id: Number(wh) }).then(check).catch(() => ({})),
       ]);
+      adminLines = al; dupOf = dc;
       flags = fl;
+      shortList = sl;
+      const shortOf = new Map(sl.filter((x) => x.status !== 'ordered').map((x) => [x.item_id, x]));
       // levels saved before Sold 7d / 60d existed: work them out once more
       const withLevels = sheet.filter((r) => r.grp !== 'Not sold');
       if (!force && withLevels.length && withLevels.every((r) => r.qty_7 == null)) return load(true);
@@ -100,13 +112,35 @@ export default {
           shelfDays: closing === null ? null : daysOnShelf(closing, Number(r.per_day || 0)),
           orderedToday: Number(r.today_qty || 0) > 0 && !bounced,
           bns: flags.flags.get(r.item_id) || null,      // bought often, hardly selling
+          short: shortOf.get(r.item_id) || null,         // marked short in market / found again
           blocked: flags.blocks.get(r.item_id) || null,  // blocked by Admin: can't be ordered
         };
       });
+      // Admin's order sheet: its qty replaces the app's; medicines not in the stock file are added
+      const byId = new Map(rows.map((r) => [r.item_id, r]));
+      for (const a of adminLines) {
+        let r = byId.get(a.item_id);
+        if (!r) {
+          const strips = a.strips == null ? null : Number(a.strips);
+          r = { item_id: a.item_id, name: a.name, pack_size: a.pack_size, grp: a.grp || 'Not sold', category: a.category, ailment: a.ailment,
+            brand: a.brand, manufacturer: a.manufacturer, chronic: a.chronic, min_stock: a.min_stock ?? 0, max_stock: a.max_stock ?? 0,
+            per_day: a.per_day, qty_7: a.qty_7, qty_30: a.qty_30, qty_60: a.qty_60, qty_90: a.qty_90, last_sold: a.last_sold,
+            counted: strips, recv: 0, closing: strips, open: 0, adminOnly: true, suggested: 0,
+            bns: flags.flags.get(a.item_id) || null, short: shortOf.get(a.item_id) || null, blocked: flags.blocks.get(a.item_id) || null };
+          rows.push(r); byId.set(a.item_id, r);
+        }
+        r.admin = a; r.appSuggested = r.suggested; r.suggested = Number(a.qty);
+        // uploaded after today's order (e.g. more for a scheme): don't treat it as already ordered
+        if (r.orderedToday && r.last_order_at && Date.parse(a.at) > Date.parse(r.last_order_at)) { r.orderedToday = false; unticked.delete(r.item_id); }
+      }
+      rows.forEach((r) => { r.dupWith = dupOf[r.item_id] || null; r.tag = tagOf(r); });
       // blocked: always unticked. Buying-not-selling: unticked only if Admin chose "Warn and untick".
+      // Check Duplicate: unticked until someone checks it.
       rows.forEach((r) => {
         if (r.blocked) { unticked.add(r.item_id); userTicked.delete(r.item_id); }
         else if (r.bns && flags.mode === 'untick' && !userTicked.has(r.item_id)) unticked.add(r.item_id);
+        else if (r.short?.status === 'short' && !userTicked.has(r.item_id)) unticked.add(r.item_id);
+        else if (r.tag === 'dup' && !r.admin && !userTicked.has(r.item_id)) unticked.add(r.item_id);   // Admin's own lines stay ticked
       });
       // already ordered today: unticked unless someone ticked it on purpose
       rows.forEach((r) => { if (r.orderedToday && !userTicked.has(r.item_id)) unticked.add(r.item_id); });
@@ -133,7 +167,7 @@ export default {
     // ------------------------------------------------------------------
     const pick = {
       order: () => rows.filter((r) => r.suggested > 0 || extra.has(r.item_id))
-        .sort((a, b) => (GROUP_ORDER[a.grp] ?? 9) - (GROUP_ORDER[b.grp] ?? 9) || (b.qty_30 || 0) - (a.qty_30 || 0)),
+        .sort((a, b) => (TAG_ORDER[a.tag] ?? 9) - (TAG_ORDER[b.tag] ?? 9) || (GROUP_ORDER[a.grp] ?? 9) - (GROUP_ORDER[b.grp] ?? 9) || (b.qty_30 || 0) - (a.qty_30 || 0)),
       decide: () => rows.filter((r) => !r.disc && r.grp === 'New' && !r.can_order && /decide by hand/.test(r.why || ''))
         .sort((a, b) => (a.days_since ?? 999) - (b.days_since ?? 999)),
       over: () => rows.filter((r) => r.closing > 0 && r.shelfDays > (cfg.expiry_warning_days || 60))
@@ -141,6 +175,7 @@ export default {
       notorder: () => rows.filter((r) => r.disc || (!r.can_order && !/decide by hand/.test(r.why || '')))
         .sort((a, b) => (a.days_since ?? 9999) - (b.days_since ?? 9999)),
       slow: () => rows.filter((r) => (r.grp || '').startsWith('Slow')).sort((a, b) => (b.qty_90 || 0) - (a.qty_90 || 0)),
+      short: () => shortList.filter((x) => x.status !== 'ordered'),
       checked: () => rows.filter((r) => !(r.suggested > 0) && !extra.has(r.item_id))
         .sort((a, b) => reasonOrder(a) - reasonOrder(b) || a.name.localeCompare(b.name)),
     };
@@ -153,8 +188,13 @@ export default {
       ? `<div class="today-note">Ordered today ${fmtDateTime(r.last_order_at).split(', ')[1] || ''} – ${fmtNum(r.today_qty, 2)} strips${r.last_order_by ? ` (${esc(r.last_order_by)})` : ''}${r.last_order_distributor ? `, ${esc(r.last_order_distributor)}` : ''}${r.last_order_no ? ` · ${esc(r.last_order_no)}` : ''} · ${r.last_received ? 'received' : 'on order'}</div>` : '';
     const flagNote = (r) => (r.blocked
       ? `<div class="bounce-note">Blocked by Admin${r.blocked.reason ? `: ${esc(r.blocked.reason)}` : ''} — can't be ordered here</div>` : '')
-      + (r.bns ? `<div><span class="pill failed" title="See Purchases → Buying, not selling">${esc(bnsLabel(r.bns, flags.days))}</span></div>` : '');
-    const stockCell = (r) => r.closing === null ? '<span class="pill warn">No conversion</span>'
+      + (r.bns ? `<div><span class="pill failed" title="See Purchases → Buying, not selling">${esc(bnsLabel(r.bns, flags.days))}</span></div>` : '')
+      + (r.admin ? `<div class="admin-note">${r.adminOnly || !r.appSuggested ? '<b>Added by Admin</b>' : `<b>Admin: ${fmtNum(r.admin.qty)}</b> (app: ${fmtNum(r.appSuggested)})`}${r.admin.note ? ` — ${esc(r.admin.note)}` : ''}${isRole('admin') ? ' <button type="button" class="linkbtn inline arm">remove</button>' : ''}</div>` : '')
+      + (r.dupWith ? `<div class="short-note">Possible duplicate code: ${esc(r.dupWith.slice(0, 3).join(', '))}</div>` : '')
+      + (r.short?.status === 'found'
+        ? `<div class="found-note"><b>Available — order now.</b> Found by ${esc(r.short.found_by || '')}</div>`
+        : r.short ? `<div class="short-note">Marked short ${fmtDateTime(r.short.last_mark)} by ${esc(r.short.by || '')} (Pharmarack ✓ Retailer Shakti ✓)${r.short.days > 1 ? ` · <b>${r.short.days} days</b>` : ''}${r.short.note ? ` — ${esc(r.short.note)}` : ''}</div>` : '');
+    const stockCell = (r) => r.adminOnly && r.closing === null ? '<span class="muted">not in stock file</span>' : r.closing === null ? '<span class="pill warn">No conversion</span>'
       : r.recv > 0 ? `${fmtNum(r.closing, 2)}<div class="small muted" title="counted + received after the stock upload">${fmtNum(r.counted, 2)} + ${fmtNum(r.recv, 2)} recd</div>` : fmtNum(r.closing, 2);
     const GROUP_KEYS = ['Fast', 'Average', 'New', 'Slow (Regular)', 'Slow (Irregular)', 'Rare'];
     const grpKey = (g) => (GROUP_KEYS.includes(g) ? g : 'Other');
@@ -164,6 +204,7 @@ export default {
       for (const k of Object.keys(pick)) { const n = pick[k]().length; const c = $(`[data-c="${k}"]`, el); if (c) c.textContent = n ? `(${fmtNum(n)})` : ''; }
       const view = $('#view', el);
       if (tab === 'history') return drawHistory(view);
+      if (tab === 'short') return drawShort(view);
       if (tab === 'order') return drawOrder(view);
       const list = pick[tab]();
       const cols = {
@@ -221,7 +262,10 @@ export default {
 
     async function drawOrder(view) {
       const all0 = pick.order();
-      const all = all0.filter(attrOk);
+      const all1 = all0.filter(attrOk);
+      const tagCounts = {}, srcCounts = { app: 0, admin: 0 };
+      all1.forEach((r) => { tagCounts[r.tag] = (tagCounts[r.tag] || 0) + 1; srcCounts[r.admin ? 'admin' : 'app']++; });
+      const all = all1.filter((r) => (!tagFilter || r.tag === tagFilter) && (!srcFilter || (srcFilter === 'admin') === !!r.admin));
       const list = all.filter((r) => !grpFilter.size || grpFilter.has(grpKey(r.grp)));
       const optsFor = (k) => [...new Set(all0.map((r) => r[k] || '(not set)'))].sort((a, b) => a.localeCompare(b));
       const grpCounts = {};
@@ -234,8 +278,17 @@ export default {
       const distOpts = (sel) => `<option value="">Choose…</option>${dists.map((d) => `<option value="${d.id}" ${String(d.id) === String(sel ?? '') ? 'selected' : ''}>${esc(d.name)}${distTat[d.id] ? ` · avg ${fmtH(distTat[d.id].hours)}` : ''}</option>`).join('')}${canPlace ? '<option value="new">+ Add distributor…</option>' : ''}`;
       // default distributor = the one last used, but never the one that just bounced it
       const distOf = (r) => distChoice.has(r.item_id) ? distChoice.get(r.item_id)
+        : r.admin?.distributor_id ? r.admin.distributor_id
         : (r.bounced && r.usual_distributor_id === r.bounce_dist_id ? '' : (r.usual_distributor_id ?? ''));
       view.innerHTML = `
+        <div class="chips tags" id="tagf">
+          <button class="chip ${tagFilter ? '' : 'on'}" data-tag="">All <span>${fmtNum(all1.length)}</span></button>
+          ${Object.keys(TAG_LABEL).map((k) => `<button class="chip tag-${k} ${tagFilter === k ? 'on' : ''}" data-tag="${k}">${TAG_LABEL[k]} <span>${fmtNum(tagCounts[k] || 0)}</span></button>`).join('')}
+          <span class="sep"></span>
+          <button class="chip ${srcFilter === 'app' ? 'on' : ''}" data-src="app">From app <span>${fmtNum(srcCounts.app)}</span></button>
+          <button class="chip ${srcFilter === 'admin' ? 'on' : ''}" data-src="admin">From Admin <span>${fmtNum(srcCounts.admin)}</span></button>
+          ${isRole('admin') ? `<button class="btn ghost small" id="aoUp">Upload order sheet</button>${adminLines.length ? '<button class="btn ghost small" id="aoClr">Remove all Admin lines</button>' : ''}` : ''}
+        </div>
         <div class="chips" id="grps">
           <button class="chip ${grpFilter.size ? '' : 'on'}" data-g="">All <span>${fmtNum(all.length)}</span></button>
           ${[...GROUP_KEYS, 'Other'].filter((g) => grpCounts[g]).map((g) => `<button class="chip ${grpFilter.has(g) ? 'on' : ''}" data-g="${esc(g)}">${esc(g)} <span>${fmtNum(grpCounts[g])}</span></button>`).join('')}
@@ -276,9 +329,9 @@ export default {
           shown.slice(0, SHOW).map((r) => `<tr data-id="${r.item_id}" class="${r.orderedToday ? 'ordered' : ''} ${unticked.has(r.item_id) ? 'off' : ''}">
             <td><input type="checkbox" class="tick" ${unticked.has(r.item_id) ? '' : 'checked'} ${r.blocked ? 'disabled title="Blocked by Admin"' : ''}></td>
             <td class="med ${r.bounced ? 'bounced' : ''}"><b>${esc(r.name)}</b> <span class="muted">${esc(r.pack_size)}</span>${extra.has(r.item_id) && !r.suggested ? ' <span class="pill">added</span>' : ''}
-              ${r.warning ? ` <span class="pill warn">${esc(r.warning)}</span>` : ''}${todayNote(r)}${flagNote(r)}
+              ${r.warning ? ` <span class="pill warn">${esc(r.warning)}</span>` : ''}${todayNote(r)}${flagNote(r)}${r.short?.status !== 'short' ? '<button type="button" class="linkbtn mshort">Short in market?</button>' : ''}
               ${r.odd_note && /check/i.test(r.odd_note) ? `<div class="small muted">${esc(r.odd_note)}</div>` : ''}</td>
-            <td class="nowrap">${grpCell(r)}</td>
+            <td class="nowrap"><span class="pill tag-${r.tag}">${TAG_LABEL[r.tag]}</span><div>${grpCell(r)}</div></td>
             ${M ? `<td class="small">${esc(r.category || '')}</td><td class="small">${esc(r.manufacturer || '')}</td><td class="small">${esc(r.speed || '')}</td><td class="num">${fmtNum(r.per_day, 2)}</td><td class="num">${fmtNum(r.normal_sale, 1)}</td><td class="num">${fmtNum(r.weeks_sold)}</td>` : ''}
             <td class="num">${fmtNum(r.min_stock)}</td><td class="num">${fmtNum(r.max_stock)}</td><td class="num">${stockCell(r)}</td>
             <td class="num">${r.open ? fmtNum(r.open, 2) : ''}</td>
@@ -289,6 +342,12 @@ export default {
             ${M ? `<td class="num">${fmtNum(r.qty_90, 2)}</td>` : ''}<td class="nowrap">${fmtDate(r.last_sold)}</td></tr>`).join('');
         $('#more', view).textContent = shown.length > SHOW ? `Showing ${SHOW} of ${fmtNum(shown.length)} — use search to find the rest; all ticked lines are included when you place the order.` : '';
         $$('input.qty', view).forEach((inp) => (inp.onchange = () => { qtyEdits.set(Number(inp.closest('tr').dataset.id), Math.max(Number(inp.value) || 0, 0)); summary(); }));
+        $$('button.mshort', view).forEach((b) => (b.onclick = () => markShort(rows.find((x) => x.item_id === Number(b.closest('tr').dataset.id)))));
+        $$('button.arm', view).forEach((b) => (b.onclick = async () => {
+          const r = rows.find((x) => x.item_id === Number(b.closest('tr').dataset.id));
+          try { await sb.rpc('remove_admin_lines', { p_warehouse_id: Number(whSel.value), p_ids: [r.admin.id] }).then(check); toast('Admin line removed'); load(); }
+          catch (e) { toast(e.message, 'error'); }
+        }));
         $$('input.tick', view).forEach((cb) => (cb.onchange = () => {
           const id = Number(cb.closest('tr').dataset.id);
           if (cb.checked) { unticked.delete(id); userTicked.add(id); } else { unticked.add(id); userTicked.delete(id); }
@@ -330,6 +389,14 @@ export default {
       $('#q', view).oninput = paint;
       $$('#attrs select', view).forEach((sel) => (sel.onchange = () => { attr[sel.dataset.k] = sel.value; drawOrder(view); }));
       if ($('#clrA', view)) $('#clrA', view).onclick = () => { Object.keys(attr).forEach((k) => (attr[k] = '')); drawOrder(view); };
+      $$('#tagf .chip[data-tag]', view).forEach((b) => (b.onclick = () => { tagFilter = b.dataset.tag; drawOrder(view); }));
+      $$('#tagf .chip[data-src]', view).forEach((b) => (b.onclick = () => { srcFilter = srcFilter === b.dataset.src ? '' : b.dataset.src; drawOrder(view); }));
+      if ($('#aoUp', view)) $('#aoUp', view).onclick = () => uploadAdminSheet();
+      if ($('#aoClr', view)) $('#aoClr', view).onclick = async () => {
+        if (!(await confirmBox({ title: 'Remove all Admin lines?', html: `<p>${adminLines.length} line(s) from your order sheets for ${esc(warehouseName(whSel.value))} will be removed. The app's own suggestions stay.</p>`, ok: 'Remove', danger: true }))) return;
+        try { await sb.rpc('remove_admin_lines', { p_warehouse_id: Number(whSel.value), p_ids: null }).then(check); toast('Removed'); load(); }
+        catch (e) { toast(e.message, 'error'); }
+      };
       $$('#grps .chip', view).forEach((b) => (b.onclick = () => {
         const g = b.dataset.g;
         if (!g) grpFilter.clear(); else grpFilter.has(g) ? grpFilter.delete(g) : grpFilter.add(g);
@@ -464,6 +531,127 @@ export default {
       });
     }
     const distName0 = (id) => dists.find((d) => String(d.id) === String(id))?.name || 'No distributor';
+
+    // Urgent / Regular / Rare / Check Duplicate (Admin's tag in the uploaded sheet wins)
+    function tagOf(r) {
+      if (r.admin?.tag) return r.admin.tag;
+      if (r.dupWith || r.bns || r.disc) return 'dup';
+      if (r.bounced || r.short?.status === 'found') return 'urgent';
+      const perDay = Number(r.per_day || 0);
+      if (['Fast', 'Average'].includes(r.grp) && r.closing != null
+          && (r.closing <= 0 || (perDay > 0 && r.closing / perDay < Number(cfg.urgent_days || 2)))) return 'urgent';
+      if (r.adminOnly) return 'regular';
+      if (!r.grp || ['Rare', 'Slow (Irregular)', 'New', 'Not sold'].includes(r.grp)) return 'rare';
+      return 'regular';
+    }
+
+    // Admin's own order sheet: first-time medicines, more qty for a scheme …
+    function uploadAdminSheet() {
+      const wrap = document.createElement('div');
+      wrap.className = 'modal-wrap';
+      wrap.innerHTML = `<div class="modal wide"><h3>Upload order sheet — ${esc(warehouseName(whSel.value))}</h3>
+        <p class="muted small">Columns: <b>Medicine Name, Pack Size, Qty</b> (strips). Optional: <b>Tag</b> (Urgent / Regular / Rare / Check Duplicate — the app decides if blank),
+          <b>Distributor</b> (pre-selected for the team), <b>Note</b> (shown to the team, e.g. "Scheme 10+2 till 30 Nov").<br>
+          Your qty replaces the app's. New medicines are added. Lines stay on the Order Sheet until they are ordered, or you remove them.</p>
+        <p class="small"><a href="#" id="aoSample">Download sample format</a></p>
+        <label class="drop"><input type="file" id="aoFile" accept=".xlsx,.xls,.csv" hidden><b>Choose the Excel file</b></label>
+        <div id="aoWork"></div>
+        <div class="modal-actions"><button type="button" class="btn ghost" data-a="no">Close</button></div></div>`;
+      document.body.appendChild(wrap);
+      $('[data-a="no"]', wrap).onclick = () => wrap.remove();
+      $('#aoSample', wrap).onclick = (e) => { e.preventDefault(); downloadExcel('Admin_order_sheet_sample.xlsx', { Order: [
+        ['Medicine Name', 'Pack Size', 'Qty', 'Tag', 'Distributor', 'Note'],
+        ['Naxdom 500 Tablet', '10 Tablet', 20, 'Urgent', 'Retailer Shakti', 'Short on Pharmarack'],
+        ['Dolo 650 Tablet', '15 Tablet', 100, 'Regular', 'ABC Pharma', 'Scheme 10+2 till 30 Nov']] }); };
+      $('#aoFile', wrap).onchange = async (e) => {
+        const file = e.target.files[0]; if (!file) return;
+        const work = $('#aoWork', wrap);
+        work.innerHTML = '<div class="progress-line">Reading…</div>';
+        let parsed;
+        try { parsed = await readExcel(file, 'adminorder'); }
+        catch (err) { work.innerHTML = `<div class="note error">${esc(err.message)}</div>`; return; }
+        const tags = {}; parsed.rows.forEach((x) => { const k = x.t || '(app decides)'; tags[k] = (tags[k] || 0) + 1; });
+        work.innerHTML = `<div class="kv"><div><span>Sheet</span><b>${esc(parsed.sheet)}</b></div><div><span>Medicines</span><b>${fmtNum(parsed.rows.length)}</b></div>
+            <div><span>Strips</span><b>${fmtNum(parsed.rows.reduce((t, x) => t + x.q, 0))}</b></div></div>
+          <p class="small">Optional columns found: <b>${parsed.found.length ? parsed.found.map((f) => ({ tag: 'Tag', dist: 'Distributor', note: 'Note' })[f]).join(', ') : 'none'}</b>
+            · Tags: ${Object.entries(tags).map(([k, n]) => `${esc(k)} ${n}`).join(', ')}</p>
+          ${parsed.problems.length ? `<div class="note warn">${parsed.problems.length} row(s) left out (quantity missing or 0).</div>` : ''}
+          <div class="row"><button class="btn primary" id="aoGo" ${parsed.rows.length ? '' : 'disabled'}>Add to ${esc(warehouseName(whSel.value))} Order Sheet</button></div>`;
+        $('#aoGo', wrap).onclick = async () => {
+          $('#aoGo', wrap).disabled = true;
+          try {
+            const r = await sb.rpc('import_admin_order', { p_warehouse_id: Number(whSel.value), p_file: file.name, p_rows: parsed.rows }).then(check);
+            wrap.remove();
+            toast(`${r.lines} medicine(s) added to the Order Sheet${r.replaced ? ` (${r.replaced} replaced an earlier Admin line)` : ''}${r.new_items ? ` · ${r.new_items} new to the item master` : ''}`);
+            srcFilter = ''; tagFilter = '';
+            load();
+          } catch (err) { toast(err.message, 'error'); $('#aoGo', wrap).disabled = false; }
+        };
+      };
+    }
+
+    // ---------------- Short in market ----------------
+    // Only after checking BOTH Pharmarack and Retailer Shakti
+    function markShort(r) {
+      const wrap = document.createElement('div');
+      wrap.className = 'modal-wrap';
+      wrap.innerHTML = `<form class="modal"><h3>Short in market — ${esc(r.name)} <span class="muted">${esc(r.pack_size || '')}</span></h3>
+        <p>Before marking it short, check <b>both</b>:</p>
+        <label class="switch"><input type="checkbox" name="ph"> Checked on <b>Pharmarack</b> — not available</label>
+        <label class="switch"><input type="checkbox" name="rs"> Checked on <b>Retailer Shakti</b> — not available</label>
+        <label class="field"><span>Note (optional)</span><input name="note" placeholder="e.g. company stock out till 30 Nov" autocomplete="off"></label>
+        <p class="muted small">It stays on the Order Sheet (unticked) with your name, so it is checked again tomorrow. Admin or Manager may mark it found.</p>
+        <div class="modal-actions"><button type="button" class="btn ghost" data-a="no">Cancel</button><button class="btn primary" disabled>Mark short in market</button></div></form>`;
+      document.body.appendChild(wrap);
+      const f = $('form', wrap), go = $('button.primary', f);
+      const upd = () => { go.disabled = !(f.ph.checked && f.rs.checked); };
+      f.ph.onchange = upd; f.rs.onchange = upd;
+      $('[data-a="no"]', f).onclick = () => wrap.remove();
+      f.onsubmit = async (e) => {
+        e.preventDefault();
+        try {
+          await sb.rpc('mark_short', { p_warehouse_id: Number(whSel.value), p_item_id: r.item_id, p_pharmarack: f.ph.checked, p_rs: f.rs.checked, p_note: f.note.value }).then(check);
+          wrap.remove(); toast(`${r.name} marked short in market`);
+          userTicked.delete(r.item_id); unticked.add(r.item_id);
+          load();
+        } catch (err) { toast(err.message, 'error'); }
+      };
+    }
+
+    function drawShort(view) {
+      const canFind = isRole('admin', 'manager');
+      const st = { short: '<span class="pill warn">Short</span>', found: '<span class="pill done">Found — order it</span>', ordered: '<span class="pill">Ordered</span>' };
+      view.innerHTML = `
+        <p class="muted small">Medicines marked "short in market" in the last 14 days (after checking Pharmarack and Retailer Shakti).
+          ${canFind ? 'If you find one available, click <b>Found — order it</b>: it goes back on the Order Sheet, ticked, with a note to the team.' : ''}
+          A medicine leaves this list once it is ordered again.</p>
+        <div class="row"><button class="btn ghost small" id="sdl">Download Excel</button></div>
+        ${shortList.length ? `<div class="scroll"><table class="tbl">
+          <tr><th>Medicine</th><th>Group</th><th class="num">Sold 30d</th><th>Last marked short</th><th class="num">Days</th><th>Note</th><th>Status</th>${canFind ? '<th></th>' : ''}</tr>
+          ${shortList.map((x) => `<tr data-id="${x.item_id}" class="${x.status === 'ordered' ? 'off' : ''}">
+            <td><b>${esc(x.name)}</b> <span class="muted">${esc(x.pack)}</span></td><td>${esc(x.grp || '')}</td><td class="num">${fmtNum(x.qty_30, 2)}</td>
+            <td class="nowrap">${fmtDateTime(x.last_mark)}<div class="small muted">${esc(x.marked_by || x.by || '')}</div></td>
+            <td class="num">${x.days > 1 ? `<b class="bounce-text">${x.days}</b>` : x.days}</td><td class="small">${esc(x.note || '')}</td>
+            <td>${st[x.status]}${x.status === 'found' ? `<div class="small">${esc(x.found_by || '')}</div>` : x.status === 'ordered' ? `<div class="small muted">${fmtDateTime(x.ordered_at)}</div>` : ''}</td>
+            ${canFind ? `<td>${x.status === 'short' ? '<button class="btn small sfound">Found — order it</button>' : ''}</td>` : ''}</tr>`).join('')}
+        </table></div>` : '<p class="muted">Nothing marked short in market in the last 14 days.</p>'}`;
+      $('#sdl', view).onclick = () => downloadExcel(`Short in market ${warehouseName(whSel.value)} ${todayISO()}.xlsx`, {
+        Short: shortList.map((x) => ({ 'Medicine Name': x.name, 'Pack Size': x.pack, Group: x.grp || '', 'Sold 30d': Number(x.qty_30 || 0),
+          'Last marked short': fmtDateTime(x.last_mark), 'Marked by': x.marked_by || x.by || '', Days: x.days, Note: x.note || '',
+          Status: { short: 'Short', found: 'Found — order it', ordered: 'Ordered' }[x.status], 'Found by': x.found_by || '',
+          Ordered: x.ordered_at ? fmtDateTime(x.ordered_at) : '' })) });
+      $$('button.sfound', view).forEach((b) => (b.onclick = async () => {
+        const x = shortList.find((y) => y.item_id === Number(b.closest('tr').dataset.id));
+        const note = await promptBox({ title: `Found — ${x.name}`, label: 'Where is it available? (shown to the team)', value: 'Available on Retailer Shakti', ok: 'Save' });
+        if (note === null || note === undefined) return;
+        try {
+          await sb.rpc('mark_found', { p_warehouse_id: Number(whSel.value), p_item_id: x.item_id, p_note: note }).then(check);
+          toast('Marked found — it is back on the Order Sheet');
+          unticked.delete(x.item_id);
+          await load(); tab = 'short'; draw();
+        } catch (e) { toast(e.message, 'error'); }
+      }));
+    }
 
     // ---------------- Orders placed ----------------
     async function drawHistory(view) {
