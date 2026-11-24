@@ -6,6 +6,7 @@ const dayNum = (iso) => Math.round(Date.parse(iso + 'T00:00:00Z') / 86400000);
 // Builds both repeat lists from purchase_report_data()
 export function buildReport(data, from, to) {
   const days = Number(data.repeat_days || 3);
+  const retDays = Number(data.return_days || 7);   // a return this soon after buying cancels that purchase
   const items = new Map(data.items.map(([id, name, pack, st, max, grp, sold]) => [id, { id, name, pack, st, max, grp, sold: Number(sold) }]));
   const dist = data.distributors || {};
   const nb = (x) => norm(x);
@@ -13,6 +14,11 @@ export function buildReport(data, from, to) {
   for (const [item, date, bill, d, qty] of data.purchases) {
     if (!buys.has(item)) buys.set(item, []);
     buys.get(item).push({ date, bill, distId: d, dist: dist[d] || '', qty: Number(qty) });
+  }
+  const rets = new Map();     // item -> [{date, ref, dist, strips, loose}]
+  for (const [item, date, ref, d, strips, loose] of data.returns || []) {
+    if (!rets.has(item)) rets.set(item, []);
+    rets.get(item).push({ date, ref, distId: d, dist: dist[d] || '', strips: strips === null ? null : Number(strips), loose: Number(loose) });
   }
   const ordersBy = new Map();
   for (const [item, no, at, d, qty, inv, ch] of data.orders) {
@@ -26,7 +32,16 @@ export function buildReport(data, from, to) {
   const make = (it, group) => {
     const total = group.reduce((a, b) => a + b.qty, 0);
     const first = group[0].date, last = group[group.length - 1].date;
+    // returns of this medicine on or after the first purchase and within retDays of the last one
+    const returns = (rets.get(it.id) || []).filter((r) => r.date >= first && dayNum(r.date) <= dayNum(last) + retDays);
+    const returned = returns.reduce((a, r) => a + (r.strips || 0), 0);
+    const kept = total - returned;
     const causes = [];
+    for (const r of returns) {
+      causes.push(r.strips === null
+        ? `Returned ${r.loose} loose to ${r.dist} on ${r.date} (no strip conversion — fix in Item master)`
+        : `Returned ${r.strips} strip(s) to ${r.dist} on ${r.date} (ref ${r.ref})`);
+    }
     if (it.st === 'discontinued') causes.push('Discontinued item bought (Duplicate Items list)');
     const ords = (ordersBy.get(it.id) || []).filter((o) => dayNum(o.day) >= dayNum(first) - 3 && dayNum(o.day) <= dayNum(last));
     const matched = group.filter((b) => ords.some((o) => o.distId === b.distId && o.refs.includes(nb(b.bill))));
@@ -36,8 +51,11 @@ export function buildReport(data, from, to) {
     const others = (byName.get(nb(it.name)) || []).filter((o) => o.id !== it.id && (buys.get(o.id) || [])
       .some((b) => dayNum(b.date) >= dayNum(first) - days && dayNum(b.date) <= dayNum(last) + days));
     if (others.length) causes.push(`Also bought in other pack size: ${others.map((o) => o.pack).join(', ')}`);
-    if (!causes.length) causes.push('Check: ordered once but bought more than once');
-    return { name: it.name, pack: it.pack, grp: it.grp, buys: group, total, max: it.max, extra: it.max == null ? 0 : Math.max(total - it.max, 0), sold: it.sold, causes };
+    if (causes.length === returns.length) causes.push('Check: ordered once but bought more than once');
+    return { name: it.name, pack: it.pack, grp: it.grp, buys: group, total, returned, kept, returns,
+             max: it.max, extra: it.max == null ? 0 : Math.max(kept - it.max, 0), sold: it.sold, causes,
+             // what was kept is no more than one of the purchases: the extra bill(s) went back
+             settled: returned > 0 && kept <= Math.max(...group.map((b) => b.qty)) };
   };
 
   const same = [], multi = [];
@@ -60,6 +78,8 @@ export function buildReport(data, from, to) {
     }
     flush();
   }
-  const order = (a, b) => b.extra - a.extra || b.total - a.total;
-  return { same: same.sort(order), multi: multi.sort(order) };
+  const order = (a, b) => b.extra - a.extra || b.kept - a.kept;
+  // repeats fully settled by a return are listed apart, not as problems
+  const open = (l) => l.filter((r) => !r.settled).sort(order), settled = (l) => l.filter((r) => r.settled);
+  return { same: open(same), multi: open(multi), settled: [...settled(same), ...settled(multi)] };
 }

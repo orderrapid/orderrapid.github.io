@@ -43,6 +43,15 @@ export const COLUMNS = {
     manufacturer: ['manufacturer', 'manufacturername', 'companyname', 'company'],
     chronic:      ['chronic', 'type', 'chronicacute'],
   },
+  // purchase return report (quantity in LOOSE units, e.g. tablets)
+  returns: {
+    date: ['date', 'returndate', 'challandate'],
+    ref:  ['referenceno', 'refno', 'reference', 'returnno', 'challanno', 'returnchallanno', 'debitnoteno'],
+    dist: ['distributor', 'distributorname', 'supplier', 'suppliername', 'party', 'partyname'],
+    name: ['medicinesname', 'medicinename', 'itemname', 'productname', 'medicine'],
+    pack: ['packsize', 'pack'],
+    qty:  ['totalquantity', 'quantity', 'qty', 'returnqty', 'totalqty', 'qtyloose', 'looseqty'],
+  },
   // Admin's own order sheet
   adminorder: {
     name: ['medicinename', 'medicinesname', 'itemname', 'productname', 'medicine'],
@@ -78,6 +87,7 @@ const REQUIRED = {
   purchase: ['date', 'bill', 'dist', 'name', 'pack', 'qty'],
   dupes: ['name', 'pack', 'decision'],
   adminorder: ['name', 'pack', 'qty'],
+  returns: ['date', 'ref', 'dist', 'name', 'pack', 'qty'],
   details: ['name', 'pack'],
 };
 // besides the required columns, a sheet must have at least one of these
@@ -299,6 +309,30 @@ export function parseDetails(rows) {
   return { rows: out, problems: [], headerRow, found };
 }
 
+export function parseReturns(rows) {
+  const { headerRow, map } = findColumns(rows, 'returns');
+  const out = [], problems = [];
+  let first = null, last = null;
+  const refs = new Set(), dists = new Set();
+  for (let r = headerRow + 1; r < rows.length; r++) {
+    const row = rows[r] || [];
+    const n = text(row[map.name]);
+    if (isJunk(n) || n === '-') continue;          // the "-" total line at the bottom
+    const rec = { d: toISODate(row[map.date]), b: text(row[map.ref]), s: text(row[map.dist]).replace(/\s+/g, ' '),
+                  n, p: text(row[map.pack]), q: toNumber(row[map.qty]) };
+    if (!rec.d || !rec.b || !rec.s || rec.q === null || rec.q <= 0) {
+      if (problems.length < 50) problems.push({ row: r + 1, why: !rec.d ? 'date missing' : !rec.b ? 'reference no. missing' : !rec.s ? 'distributor missing' : 'quantity missing or 0', value: row });
+      continue;
+    }
+    out.push(rec);
+    refs.add(rec.d + '|' + rec.b); dists.add(rec.s.toLowerCase());
+    if (!first || rec.d < first) first = rec.d;
+    if (!last || rec.d > last) last = rec.d;
+  }
+  return { rows: out, problems, headerRow,
+    summary: { lines: out.length, refs: refs.size, distributors: dists.size, firstDate: first, lastDate: last, problems: problems.length } };
+}
+
 export function parseAdminOrder(rows) {
   const { headerRow, map } = findColumns(rows, 'adminorder');
   const out = [], problems = [];
@@ -348,6 +382,6 @@ export function pickSheet(XLSX, wb, kind) {
 export function parseWorkbook(XLSX, data, kind) {
   const wb = XLSX.read(data, { type: 'array', cellDates: false, cellFormula: false, cellHTML: false, cellStyles: false });
   const { sheet, rows } = pickSheet(XLSX, wb, kind);
-  const parser = { sales: parseSales, stock: parseStock, items: parseItemMaster, purchase: parsePurchase, dupes: parseDupes, details: parseDetails, adminorder: parseAdminOrder }[kind];
+  const parser = { sales: parseSales, stock: parseStock, items: parseItemMaster, purchase: parsePurchase, dupes: parseDupes, details: parseDetails, adminorder: parseAdminOrder, returns: parseReturns }[kind];
   return { sheet, ...parser(rows) };
 }

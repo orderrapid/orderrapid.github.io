@@ -31,7 +31,7 @@ export async function orderSheetFlags(warehouseId, cfg) {
 }
 
 export const bnsLabel = (f, days) =>
-  `Bought ${f.buys}× from ${f.dists} distributor${f.dists > 1 ? 's' : ''} in ${days} days, sold ${fmtNum(f.sold, 2)} of ${fmtNum(f.qty, 2)} strips`;
+  `Bought ${f.buys}× from ${f.dists} distributor${f.dists > 1 ? 's' : ''} in ${days} days, sold ${fmtNum(f.sold, 2)} of ${fmtNum(f.kept ?? f.qty, 2)} strips${Number(f.returned) ? ` kept (${fmtNum(f.returned, 2)} returned)` : ''}`;
 
 export function causes(f) {
   const out = [];
@@ -49,7 +49,7 @@ export function bnsCard(box, getWarehouse, cfg) {
   let list = [], lastBlocks = [], periodNote = '';
   box.innerHTML = `
     <h3>Buying, not selling</h3>
-    <p class="muted small">Medicines bought on many bills or from several distributors while hardly selling — usually a wrong item mapping,
+    <p class="muted small">Medicines bought on many bills or from several distributors while hardly selling (returns within a week of buying are taken off) — usually a wrong item mapping,
       an automatic order, or a duplicate code. Biggest unsold quantity first.</p>
     <div class="filters">
       <label class="small">Last <input type="number" class="b-days" min="1" value="${L.days}" style="width:60px"> days</label>
@@ -100,7 +100,7 @@ export function bnsCard(box, getWarehouse, cfg) {
     const out = $('.b-out', box);
     out.innerHTML = `<p class="small muted">Period: ${esc(periodNote)}</p>
       ${shown.length ? `<div class="scroll"><table class="tbl">
-        <tr><th>Medicine</th><th>Bought</th><th class="num">Strips bought</th><th class="num">₹ bought</th><th class="num">Strips sold</th>
+        <tr><th>Medicine</th><th>Bought</th><th class="num">Strips bought</th><th class="num">Returned</th><th class="num">Kept</th><th class="num">₹ bought</th><th class="num">Strips sold</th>
           <th class="num">Stock now</th><th class="num">Max</th><th>Likely cause</th>${admin ? '<th></th>' : ''}</tr>
         ${shown.map((r) => `<tr data-id="${r.item_id}">
           <td class="med"><b>${esc(r.name)}</b> <span class="muted">${esc(r.pack)}</span>
@@ -108,7 +108,9 @@ export function bnsCard(box, getWarehouse, cfg) {
             <details class="small"><summary>${r.lines} purchase line(s)</summary>${r.bills.map((b) =>
               `${fmtDate(b.date)} · ${esc(b.dist)} · bill ${esc(b.bill)} · <b>${fmtNum(b.qty, 2)}</b>${b.app ? ' · <span class="muted">app order</span>' : ' · <b class="bounce-text">not ordered in app</b>'}`).join('<br>')}</details></td>
           <td class="small">${r.buys} bill(s) from ${r.dists}:<br>${esc((r.distributors || []).join(', '))}</td>
-          <td class="num"><b>${fmtNum(r.qty, 2)}</b></td><td class="num">${fmtNum(r.amount)}</td>
+          <td class="num">${fmtNum(r.qty, 2)}</td>
+          <td class="num">${Number(r.returned) ? `<span class="bounce-text" title="${esc((r.returns || []).map((x) => `${x.date} ${x.dist} ref ${x.ref}: ${x.strips ?? x.loose + ' loose'}`).join('\n'))}">−${fmtNum(r.returned, 2)}</span>` : ''}</td>
+          <td class="num"><b>${fmtNum(r.kept ?? r.qty, 2)}</b></td><td class="num">${fmtNum(r.amount)}</td>
           <td class="num">${fmtNum(r.sold, 2)}</td><td class="num">${r.stock == null ? '—' : fmtNum(r.stock, 2)}</td>
           <td class="num">${r.max == null ? '—' : fmtNum(r.max)}</td>
           <td>${causes(r).map((c) => `<div class="cause">${esc(c)}</div>`).join('')}</td>
@@ -138,7 +140,7 @@ export function bnsCard(box, getWarehouse, cfg) {
     const c = cur();
     downloadExcel(`Buying not selling ${warehouseName(getWarehouse())} last ${c.days} days.xlsx`, {
       Medicines: list.map((r) => ({ 'Medicine Name': r.name, 'Pack Size': r.pack, Bills: r.buys, Distributors: (r.distributors || []).join(', '),
-        'Strips bought': Number(r.qty), '₹ bought': Number(r.amount || 0), 'Strips sold': Number(r.sold), 'Stock now': r.stock == null ? '' : Number(r.stock),
+        'Strips bought': Number(r.qty), Returned: Number(r.returned || 0), Kept: Number(r.kept ?? r.qty), '₹ bought': Number(r.amount || 0), 'Strips sold': Number(r.sold), 'Stock now': r.stock == null ? '' : Number(r.stock),
         Max: r.max ?? '', 'Likely cause': causes(r).join('; '), Blocked: r.blocked ? (r.blocked.reason || 'Yes') : '' })),
       'Purchase lines': list.flatMap((r) => r.bills.map((b) => ({ 'Medicine Name': r.name, 'Pack Size': r.pack, Date: b.date, Distributor: b.dist,
         'Bill No': b.bill, Qty: Number(b.qty), Amount: Number(b.amount || 0), 'Ordered in app': b.app ? 'Yes' : 'No' }))),

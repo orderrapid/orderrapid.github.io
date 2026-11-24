@@ -138,11 +138,12 @@ export default {
         const q = $('#dq', el).value.trim().toLowerCase();
         const rows = drillRows.filter((r) => !q || r.name.toLowerCase().includes(q)).slice(0, 500);
         $('#dt', el).innerHTML = `<tr><th>Medicine</th><th>Pack</th><th class="num">Sales ₹</th><th class="num">Strips sold</th><th class="num">Before</th><th class="num">Growth</th>
-          <th class="num">Bills</th><th class="num">Customers</th><th class="num">Strips bought</th><th class="num">Bought / sold</th></tr>
+          <th class="num">Bills</th><th class="num">Customers</th><th class="num">Strips bought</th><th class="num">Returned</th><th class="num">Kept / sold</th></tr>
           ${rows.map((r) => `<tr><td>${esc(r.name)}</td><td>${esc(r.pack_size)}</td><td class="num">${money(r.sales_amt)}</td><td class="num">${fmtNum(r.sales_qty, 2)}</td>
             <td class="num">${fmtNum(r.prev_qty, 2)}</td><td class="num">${growthCell(Number(r.sales_qty), Number(r.prev_qty))}</td>
             <td class="num">${fmtNum(r.bills)}</td><td class="num">${fmtNum(r.customers)}</td><td class="num">${fmtNum(r.purchase_qty, 2)}</td>
-            <td class="num">${ratioCell(r.purchase_qty, r.sales_qty)}</td></tr>`).join('')}`;
+            <td class="num">${Number(r.returned_qty) ? `−${fmtNum(r.returned_qty, 2)}` : ''}</td>
+            <td class="num">${ratioCell(keptOf(r), r.sales_qty)}</td></tr>`).join('')}`;
       };
       $('#dq', el).oninput = paint;
       paint();
@@ -157,20 +158,23 @@ export default {
       const r = bought / sold;
       return `<span class="${r > OVERBUY ? 'down' : ''}">${r > OVERBUY ? '<b>' : ''}${(r * 100).toFixed(0)}%${r > OVERBUY ? '</b>' : ''}</span>`;
     };
+    // strips kept = bought − returned (returns in the same dates)
+    const keptOf = (g) => Math.max(Number(g.purchase_qty) - Number(g.returned_qty || 0), 0);
     function drawBuySell(view) {
       const rows = groups.filter((g) => Number(g.purchase_qty) > 0)
-        .map((g) => ({ ...g, ratio: Number(g.sales_qty) ? Number(g.purchase_qty) / Number(g.sales_qty) : Infinity }))
+        .map((g) => ({ ...g, kept: keptOf(g), ratio: Number(g.sales_qty) ? keptOf(g) / Number(g.sales_qty) : Infinity }))
         .sort((a, b) => b.ratio - a.ratio || b.purchase_qty - a.purchase_qty);
       const flagged = rows.filter((r) => r.ratio > OVERBUY);
-      view.innerHTML = `<p class="muted small">Strips bought vs strips sold in the same dates. Above <b>${OVERBUY * 100}%</b> = buying more than selling, so stock is building up (flagged in red).
+      view.innerHTML = `<p class="muted small">Strips kept (bought − returned) vs strips sold in the same dates. Above <b>${OVERBUY * 100}%</b> = buying more than selling, so stock is building up (flagged in red).
           Needs purchases uploaded for these dates.</p>
         ${rows.length ? `<div class="note ${flagged.length ? 'warn' : 'ok'}"><b>${flagged.length}</b> of ${rows.length} ${byLabel().toLowerCase()} groups bought more than ${OVERBUY * 100}% of what sold.</div>
         <div class="scroll"><table class="tbl rep">
-          <tr><th>${byLabel()}</th><th class="num">Strips bought</th><th class="num">Strips sold</th><th class="num">Bought / sold</th><th class="num">Extra strips</th>
+          <tr><th>${byLabel()}</th><th class="num">Strips bought</th><th class="num">Returned</th><th class="num">Kept</th><th class="num">Strips sold</th><th class="num">Kept / sold</th><th class="num">Extra strips</th>
             <th class="num">Purchases ₹</th><th class="num">Sales ₹</th></tr>
           ${rows.map((r) => `<tr class="click ${r.ratio > OVERBUY ? 'flag' : ''}" data-g="${esc(r.grp)}"><td><b>${esc(r.grp)}</b></td><td class="num">${fmtNum(r.purchase_qty)}</td>
-            <td class="num">${fmtNum(r.sales_qty)}</td><td class="num">${ratioCell(r.purchase_qty, r.sales_qty)}</td>
-            <td class="num">${fmtNum(Math.max(Number(r.purchase_qty) - Number(r.sales_qty), 0))}</td>
+            <td class="num">${Number(r.returned_qty) ? `−${fmtNum(r.returned_qty)}` : ''}</td><td class="num"><b>${fmtNum(r.kept)}</b></td>
+            <td class="num">${fmtNum(r.sales_qty)}</td><td class="num">${ratioCell(r.kept, r.sales_qty)}</td>
+            <td class="num">${fmtNum(Math.max(r.kept - Number(r.sales_qty), 0))}</td>
             <td class="num">${money(r.purchase_amt)}</td><td class="num">${money(r.sales_amt)}</td></tr>`).join('')}
         </table></div><div id="drill"></div>`
         : '<p class="muted">No purchases uploaded for these dates. Upload them on the Purchases screen.</p>'}`;
@@ -228,8 +232,8 @@ export default {
         [byLabel()]: x.grp, Medicines: x.items, 'Sales ₹': Number(x.sales_amt), 'Sales ₹ before': Number(x.prev_amt),
         'Growth %': pct(Number(x.sales_amt), Number(x.prev_amt)) === null ? 'new' : Number(pct(Number(x.sales_amt), Number(x.prev_amt)).toFixed(1)),
         'Strips sold': Number(x.sales_qty), 'Strips sold before': Number(x.prev_qty), Bills: Number(x.bills), Customers: Number(x.customers),
-        'Purchases ₹': Number(x.purchase_amt), 'Strips bought': Number(x.purchase_qty),
-        'Bought / sold %': Number(x.sales_qty) ? Number(((100 * x.purchase_qty) / x.sales_qty).toFixed(0)) : '',
+        'Purchases ₹': Number(x.purchase_amt), 'Strips bought': Number(x.purchase_qty), 'Strips returned': Number(x.returned_qty || 0),
+        'Kept / sold %': Number(x.sales_qty) ? Number(((100 * keptOf(x)) / x.sales_qty).toFixed(0)) : '',
       }));
       const sheets = { [`By ${byLabel()}`.slice(0, 31)]: g,
         'Rising & Falling': movers.map((m) => ({ Direction: m.direction === 'up' ? 'Rising' : 'Falling', Medicine: m.name, Pack: m.pack_size,
