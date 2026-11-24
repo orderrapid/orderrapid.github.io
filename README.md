@@ -28,7 +28,7 @@ There is no build step: the files in this folder are the website.
 Coming in part 3: purchase import and the overstock report (repeat orders, duplicate codes, pack sizes).
 
 ## Database updates
-Run each file once, in order, in Supabase → SQL Editor: `01_schema.sql`, `02_sale_time.sql`, `03_orders.sql`, `04_check_upload.sql`, `05_distributor_invoice.sql`, `06_purchases_bounces.sql`, `07_categories_reports.sql`, `08_item_master_view.sql`, `09_delete_download.sql`, `10_buying_not_selling.sql`, `11_turn_around_time.sql`, `12_short_in_market.sql`, `13_admin_order_sheet.sql`, `14_admin_sheet_format.sql`, `15_purchase_returns.sql`.
+Run each file once, in order, in Supabase → SQL Editor: `01_schema.sql`, `02_sale_time.sql`, `03_orders.sql`, `04_check_upload.sql`, `05_distributor_invoice.sql`, `06_purchases_bounces.sql`, `07_categories_reports.sql`, `08_item_master_view.sql`, `09_delete_download.sql`, `10_buying_not_selling.sql`, `11_turn_around_time.sql`, `12_short_in_market.sql`, `13_admin_order_sheet.sql`, `14_admin_sheet_format.sql`, `15_purchase_returns.sql`, `16_upload_ranges.sql`.
 All are safe to run again.
 
 ## One-time setup (about 20 minutes)

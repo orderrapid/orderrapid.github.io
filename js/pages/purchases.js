@@ -1,6 +1,7 @@
 import { sb, check, state, rememberWarehouse, warehouseName } from '../db.js';
 import { buildReport } from '../repeats.js';
 import { dataTools } from '../datatools.js';
+import { rangeHtml } from '../ranges.js';
 import { bnsCard } from '../bns.js';
 import { loadSettings } from '../levels.js';
 import { esc, $, $$, fmtDate, fmtDateTime, fmtNum, toast, confirmBox, readExcel, warehouseOptions, downloadExcel, todayISO, addDays } from '../ui.js';
@@ -56,7 +57,7 @@ export default {
       status = await sb.rpc('purchase_status').then(check);
       const s = status.find((x) => String(x.warehouse_id) === whSel.value);
       $('#upto', el).innerHTML = s?.last_date
-        ? `<span class="label">${esc(s.warehouse)}: purchases uploaded up to</span><span class="value">${fmtDate(s.last_date)}</span>`
+        ? `<span class="label">${esc(s.warehouse)}: purchases uploaded up to</span><span class="value">${fmtDate(s.last_date)}</span>${await rangeHtml('purchases', whSel.value)}`
         : `<span class="label">No purchases uploaded yet for ${esc(warehouseName(whSel.value))}</span>`;
     };
     let loadBns = () => {};
@@ -65,7 +66,7 @@ export default {
       try { rs = await sb.rpc('returns_status').then(check); } catch { /* database not updated yet */ }
       const r = rs.find((x) => String(x.warehouse_id) === whSel.value);
       $('#rupto', el).innerHTML = r?.last_date
-        ? `<span class="label">${esc(warehouseName(whSel.value))}: purchase returns uploaded up to</span><span class="value">${fmtDate(r.last_date)}</span>`
+        ? `<span class="label">${esc(warehouseName(whSel.value))}: purchase returns uploaded up to</span><span class="value">${fmtDate(r.last_date)}</span>${await rangeHtml('returns', whSel.value)}`
         : `<span class="label">No purchase returns uploaded yet for ${esc(warehouseName(whSel.value))}</span>`;
     };
     whSel.onchange = () => { rememberWarehouse(whSel.value); $('#work', el).innerHTML = ''; $('#rwork', el).innerHTML = ''; showStatus(); showRetStatus(); loadReport(); loadBns(); };

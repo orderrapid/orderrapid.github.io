@@ -1,6 +1,7 @@
 import { sb, check, state, rememberWarehouse, warehouseName } from '../db.js';
 import { recalculate } from '../levels.js';
 import { dataTools } from '../datatools.js';
+import { rangeHtml } from '../ranges.js';
 import { esc, $, fmtDate, fmtDateTime, fmtNum, toast, confirmBox, readExcel, warehouseOptions, addDays, downloadExcel } from '../ui.js';
 
 const BATCH = 2500;
@@ -35,7 +36,7 @@ export default {
       const s = status.find((x) => String(x.warehouse_id) === whSel.value);
       $('#upto', el).innerHTML = s?.last_date
         ? `<span class="label">${esc(s.warehouse)}: sales uploaded up to</span><span class="value">${fmtDate(s.last_date)}</span>
-           <span class="hint">Next file should start from ${fmtDate(addDays(s.last_date, 1))}</span>`
+           <span class="hint">Next file should start from ${fmtDate(addDays(s.last_date, 1))}</span>${await rangeHtml('sales', whSel.value)}`
         : `<span class="label">No sales uploaded yet for ${esc(warehouseName(whSel.value))}</span>
            <span class="hint">Your first file can hold the full history.</span>`;
     };
